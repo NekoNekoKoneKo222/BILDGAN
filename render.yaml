@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: bildgan-fps
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install --no-audit --no-fund && npm run check && npm run test && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production

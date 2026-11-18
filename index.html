@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+<meta name="theme-color" content="#080e18"/>
+<title>BILDGAN | Build Your Battle</title>
+<meta name="description" content="BILDGAN: 5分で決着する、自由に武器と装置を作る3D物理FPS。ソロ・PvP・協力ボス戦。" />
+</head>
+<body>
+<div id="root">
+  <div id="hud">
+    <header id="top">
+      <div class="brandMini"><b>BILD<span>GAN</span></b><small>BUILD YOUR BATTLE</small></div>
+      <div class="phase" id="phase">GARAGE</div>
+      <div class="timer" id="timer">05:00</div>
+    </header>
+    <div id="statusline"></div>
+    <div id="scoreboard"></div>
+    <div id="crosshair"><span></span><span></span><span></span><span></span></div>
+    <div id="hitmarker">✦</div>
+    <div id="damageOverlay"></div>
+    <div id="eventFeed"></div>
+    <div id="objectiveHud"></div>
+    <div id="bossHud" hidden><div class="bossLabel">CORE BREAKER <span id="bossPhase">PHASE 1</span></div><div class="meter bossMeter"><div id="bossMeter"></div></div></div>
+    <div id="lowHud">
+      <div class="health"><div class="caption">STRUCTURAL INTEGRITY <b id="hpText">100</b></div><div class="meter"><div id="hpMeter"></div></div></div>
+      <div class="ammo"><span id="weaponName">SCRAP RIFLE</span><strong id="ammoText">20 / ∞</strong><small id="weaponMeta"></small></div>
+      <div class="buildReadout" id="buildReadout" hidden></div>
+    </div>
+    <div id="controlHint">WASD 移動　SHIFT ダッシュ　SPACE ジャンプ　左クリック 射撃　右クリック 物理グラブ　B 建築</div>
+    <div id="toast" aria-live="polite"></div>
+    <div id="matchEnd" hidden>
+      <div class="endInner">
+        <div class="eyebrow">ROUND COMPLETE</div>
+        <h2 id="endTitle">RESULT</h2>
+        <p id="endDetail"></p>
+        <div class="resultStats" id="endStats"></div>
+        <button id="replay" class="cta">もう一度プレイ</button><button id="backHome" class="secondary">ホームに戻る</button>
+      </div>
+    </div>
+    <div id="waiting" hidden><div class="waitCard"><div class="eyebrow">MULTIPLAYER LOBBY</div><h2>ルーム準備中</h2><p>友達にコードを送ってください。1人でもCPUを追加して開始できます。</p><div class="roomCode" id="waitCode">------</div><div id="waitMembers"></div><div class="actions"><button id="copyRoom" class="secondary">招待URLをコピー</button><button id="startRoom" class="cta">試合開始</button><button id="leaveRoom" class="secondary">退出</button></div></div></div>
+    <div id="mobile" hidden>
+      <div id="stick"><div id="nub"></div></div>
+      <div id="touchLook"></div>
+      <div class="touchBtns"><button id="touchFire">攻撃 / 配置</button><button id="touchGrab">つかむ</button><button id="touchJump">ジャンプ</button><button id="touchBuild">建築</button></div>
+    </div>
+  </div>
+  <main id="menu" class="menu">
+    <div class="menuBackdrop"></div>
+    <div class="shell">
+      <div class="menuHead"><div><div class="eyebrow">ONLINE PHYSICS COMBAT · PUBLIC ALPHA</div><h1>BILD<span>GAN</span></h1><p>自分の武器で、戦場を組み替えろ。</p></div><div class="menuVersion">BUILD YOUR BATTLE <b>v0.2</b></div></div>
+      <nav class="menuTabs" aria-label="メニュー">
+        <button class="tab active" data-tab="play">PLAY</button><button class="tab" data-tab="weapon">WEAPON LAB</button><button class="tab" data-tab="build">CONSTRUCT</button><button class="tab" data-tab="guide">GUIDE</button>
+      </nav>
+      <section id="play" class="pane">
+        <div class="columns">
+          <div>
+            <div class="sectionTitle">SELECT YOUR BATTLE <small>全モード5分以内</small></div>
+            <div class="modes">
+              <button class="modeCard" id="solo"><b>01 <strong>SOLO SCRIMMAGE</strong></b><span>CPUとの1v1。気軽に試してビルドを磨く。</span><small>BOT DUEL · 1 PLAYER</small></button>
+              <button class="modeCard" id="pvp"><b>02 <strong>SCRAP CLASH</strong></b><span>拠点を奪って得点。友達と最大4人で乱闘。</span><small>PVP · 1–4 PLAYERS</small></button>
+              <button class="modeCard" id="boss"><b>03 <strong>CORE BREAKER</strong></b><span>パターンを見切り、弱点を破壊する協力戦。</span><small>CO-OP · 1–4 PLAYERS</small></button>
+            </div>
+          </div>
+          <aside class="aside">
+            <div class="sectionTitle">YOUR IDENTITY</div><label class="fieldLabel" for="nickname">PLAYER NAME</label><input id="nickname" maxlength="16" autocomplete="off" value="SCRAPPER" />
+            <div class="sectionTitle spaceTop">JOIN FRIENDS</div><label class="fieldLabel" for="joinCode">INVITE CODE</label>
+            <div class="inline"><input id="joinCode" maxlength="6" placeholder="6文字のコード" /><button id="join" class="cta">参加</button></div>
+            <div class="divider"></div>
+            <p class="subText">一人で遊ぶ場合でも、対戦の得点・攻撃・ボスの行動まで同じサーバーで処理されます。</p>
+            <div class="pulseNote">● <span id="networkStatus">SERVER ONLINE CHECK...</span></div>
+          </aside>
+        </div>
+      </section>
+      <section id="weapon" class="pane" hidden>
+        <div class="sectionTitle">WEAPON LAB <small>5モジュールを自由に組み替える</small></div>
+        <div class="columns">
+          <div><p class="subText">どんな組み合わせでも使える代わりに、火力・連射・反動・リロードには必ずトレードオフがあります。武器は無課金、全パーツを最初から使用できます。</p><div id="moduleList"></div><div class="actions"><button id="saveWeapon" class="cta">武器を保存</button><button id="resetWeapon" class="secondary">初期化</button></div></div>
+          <aside class="aside"><div class="sectionTitle">LIVE WEAPON DATA</div><div class="gunPreview" id="gunPreview">▰━━━━╾</div><div id="weaponStats"></div><p class="subText" id="buildAdvice"></p></aside>
+        </div>
+      </section>
+      <section id="build" class="pane" hidden>
+        <div class="sectionTitle">CONSTRUCTION LAB <small>フィールド用の防衛装置を保存</small></div>
+        <p class="subText">戦闘中はBで建築モードを切り替え。装置はサーバーの物理演算で動き、爆発・射撃・衝突で破壊されます。最初は拠点を守るシンプルな配置がおすすめ。</p>
+        <div class="buildLab" id="buildLab"></div>
+        <div class="actions"><button id="savePlan" class="cta">防衛キットを保存</button><button id="clearPlan" class="secondary">初期化</button></div>
+        <div class="hintCard">試合では建築エネルギーの上限があります。最初から全マシンを無限に置けるわけではありません。</div>
+      </section>
+      <section id="guide" class="pane" hidden>
+        <div class="guideGrid"><div><h3>5 MINUTES TO WIN</h3><p>銃だけでなく、中央のエネルギー拠点を占領して得点。倒されてもリスポーンできるので、最後まで逆転が狙えます。</p></div><div><h3>BUILD ON THE FLY</h3><p>物理グラブで落ちたパーツを運ぶ。建築モードでは装甲、バネ、砲台、爆発バレルを組み合わせて戦場を変えます。</p></div><div><h3>BOSS MECHANICS</h3><p>ボスはHPに応じて行動が変化し、足元の危険範囲を予告。弱点を撃つことでダメージが増えます。</p></div><div><h3>CONTROLS</h3><p>WASD移動・Spaceジャンプ・Shiftダッシュ。左クリック射撃、右クリックで物体をつかみ、離すと投げる。B建築、1〜6パーツ選択、R回転。</p></div></div>
+        <div class="hintCard">公開前テスト中のビルドです。まずはソロを試し、その後フレンド用ルームでPvPや協力ボス戦を遊んでください。</div>
+      </section>
+    </div>
+  </main>
+</div>
+<script type="module" src="/client/main.js"></script>
+</body>
+</html>
