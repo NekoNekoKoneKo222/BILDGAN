@@ -141,7 +141,7 @@ function deal(room,p,amount,from){
 function finishHit(room,shooter,target,damage,kind){
  if(kind==='terrain')return false;
  if(kind==='part'){
-  if(target.owner===shooter.id&&room.mode!=='boss')return false;
+  if(room.mode!=='boss'&&resolveTeam(room,target.owner)===shooter.team)return false;
   const factor=shooter.gun?.gun?.core==='breaker'?2.8:1.2;
   target.hp-=damage*factor;
   if(shooter.gun?.gun?.core==='pulse')target.disabledUntil=Date.now()+3000;
@@ -216,15 +216,16 @@ function place(room,player,m){
  if(!spec||!validPosition(m.pos)||player.inv[kind]<=0||player.energy<spec.cost)return send(player.ws,{t:'event',message:'パーツまたはエネルギー不足'});
  const pos=V(m.pos.x,m.pos.y,m.pos.z);
  if(Math.abs(pos.x)>ARENA_LIMIT||Math.abs(pos.z)>ARENA_LIMIT||pos.y<.8||pos.y>12||D(pos,player.pos)>11.5||D(pos,player.pos)<1.3)return;
- if(room.phase==='prep'&&Math.hypot(pos.x-player.home.x,pos.z-player.home.z)>16)return send(player.ws,{t:'event',message:'準備中は自分の建築エリア内で設置してください'});
+ if(room.phase==='prep'&&Math.hypot(pos.x-player.home.x,pos.z-player.home.z)>9.5)return send(player.ws,{t:'event',message:'準備中は自分の個人建築エリア内で設置してください'});
  if(room.rule==='relay'&&room.relays.some(x=>D(V(x.pos.x,1,x.pos.z),pos)<4))return;
  if(ARENA_SOLIDS.some(s=>Math.abs(pos.x-s.pos.x)<s.half.x+.95&&Math.abs(pos.z-s.pos.z)<s.half.z+.95&&pos.y-s.pos.y<s.half.y+.85&&pos.y-s.pos.y>-(s.half.y+.85)))return send(player.ws,{t:'event',message:'ポールや固定建造物と重なっています'});
  if(room.rule==='fortress'&&Object.values(room.cores).some(x=>D(pos,x.pos)<3.25))return send(player.ws,{t:'event',message:'コア本体には建築できません'});
  if([...room.parts.values()].some(x=>D(x.pos,pos)<1.75))return;
+ if(allFighters(room).some(x=>x.alive&&D(x.pos,pos)<1.7))return send(player.ws,{t:'event',message:'プレイヤーやCPUと重なった場所には設置できません'});
  const count=[...room.parts.values()].filter(x=>x.owner===player.id).length;
  if(count>=18)return send(player.ws,{t:'event',message:'個人の設置数上限は18個'});
  const part=addPart(room,player,kind,pos,Number(m.rot)||0);
- if(part){player.energy-=spec.cost;player.inv[kind]--;send(player.ws,{t:'inventory',inv:player.inv});}
+ if(part){player.energy-=spec.cost;player.inv[kind]--;send(player.ws,{t:'inventory',inv:player.inv});cast(room,{t:'placed',pos,kind,by:player.id});}
 }
 
 function findHit(room,origin,dir,range,owner,ignoreId=''){
@@ -271,6 +272,7 @@ function shoot(room,player,m){
   const end=target?.point||V(origin.x+dir.x*player.gun.range,origin.y+dir.y*player.gun.range,origin.z+dir.z*player.gun.range);
   if(i===0)lastEnd=end;
   if(target){
+   if(i===0)lastKind=target.type;
    let dmg=player.gun.damage*(pellets===5?.47:1);
    if(target.type==='boss'){
     const weak=V(room.boss.pos.x+(room.boss.weakspot===0?-1.1:1.1),room.boss.pos.y+1.25,room.boss.pos.z);
@@ -281,20 +283,20 @@ function shoot(room,player,m){
     // Short-radius splash: cover still blocks the primary ray, but close-range positioning matters.
     const splash=2.4;
     for(const fighter of allFighters(room))if(fighter.id!==player.id&&fighter.team!==player.team&&D(fighter.pos,end)<splash){
-     deal(room,fighter,4.5*(1-D(fighter.pos,end)/splash),player.id);
+     if(clearSight(end,fighter.pos,[...room.parts.values()],room.rule==='fortress'))deal(room,fighter,4.5*(1-D(fighter.pos,end)/splash),player.id);
     }
-    for(const part of [...room.parts.values()])if(part.owner!==player.id&&D(part.pos,end)<splash){part.hp-=11;if(part.hp<=0)destroyPart(room,part);}
+    for(const part of [...room.parts.values()])if(resolveTeam(room,part.owner)!==player.team&&D(part.pos,end)<splash&&clearSight(end,part.pos,[...room.parts.values()],false,ARENA_SOLIDS,part.id)){part.hp-=11;if(part.hp<=0)destroyPart(room,part);}
     cast(room,{t:'explosion',pos:end,radius:2.4,minor:true});
    }
    if(core==='pulse'&&i===0){
-    for(const part of room.parts.values())if(part.owner!==player.id&&D(part.pos,end)<3.6){
+    for(const part of room.parts.values())if(resolveTeam(room,part.owner)!==player.team&&D(part.pos,end)<3.6&&clearSight(end,part.pos,[...room.parts.values()],false,ARENA_SOLIDS,part.id)){
      if(part.kind==='turret')part.disabledUntil=now+3000;
      if(part.body?.isDynamic()){const impulse=N(V(part.pos.x-end.x,1.2,part.pos.z-end.z));part.body.applyImpulse(V(impulse.x*13,impulse.y*13,impulse.z*13),true);}
     }
    }
   }
  }
- cast(room,{t:'shot',from:origin,to:lastEnd,by:player.id,core});
+ cast(room,{t:'shot',from:origin,to:lastEnd,by:player.id,core,hitType:lastKind||'none'});
  if(confirmed)send(player.ws,{t:'hit',damage:Math.round(player.gun.damage),target:lastKind});
  send(player.ws,{t:'ammo',ammo:player.ammo,mag:player.gun.mag,reload:false});
  if(player.ammo===0)reload(player);
@@ -305,6 +307,12 @@ function reload(p){
  if(!p.alive||p.ammo===p.gun.mag||now<p.reloadAt)return;
  p.reloadAt=now+p.gun.reload*1000;
  send(p.ws,{t:'ammo',ammo:p.ammo,mag:p.gun.mag,reload:true,time:p.gun.reload});
+}
+function sendCorrection(player){
+ const now=Date.now();
+ if(now-(player.lastCorrection||0)<150)return;
+ player.lastCorrection=now;
+ send(player.ws,{t:'correction',pos:player.pos});
 }
 function interactPhysics(room,p,m){
  const now=Date.now();if(now-p.lastGrab<160)return;
@@ -426,7 +434,7 @@ function updateBoss(room,dt,now){
   for(const p of alive){
    if(atk.kind==='wave'){
     if(D(p.pos,boss.pos)<atk.radius&&p.pos.y<2.5)deal(room,p,phase*6+10,'BOSS');
-   }else if(D(p.pos,atk.pos)<atk.radius)deal(room,p,phase*7+11,'BOSS');
+   }else if(D(p.pos,atk.pos)<atk.radius&&clearSight(boss.pos,p.pos,[...room.parts.values()],false))deal(room,p,phase*7+11,'BOSS');
   }
  }
  if(!boss.attack&&now>=boss.nextAttack){
@@ -491,6 +499,16 @@ function tickRoom(room,dt,now){
  for(const part of [...room.parts.values()]){
   if(!part.body?.isDynamic()&&part.kind!=='piston')continue;
   const t=part.body.translation();part.pos=V(t.x,t.y,t.z);
+  if(part.body.isDynamic()&&room.phase==='battle'&&now-(part.lastImpact||0)>800){
+   const velocity=part.body.linvel(),speed=Math.hypot(velocity.x,velocity.y,velocity.z);
+   if(speed>9)for(const fighter of allFighters(room)){
+    if(!fighter.alive||D(part.pos,fighter.pos)>1.55)continue;
+    if(deal(room,fighter,Math.min(25,speed*1.1),part.owner)){
+     part.lastImpact=now;cast(room,{t:'physicsImpact',pos:part.pos,speed:Math.round(speed),kind:part.kind});
+     break;
+    }
+   }
+  }
   if(part.pos.y<-5)destroyPart(room,part);
  }
  for(const debris of [...room.debris])if(now-debris.at>5500){room.world.removeRigidBody(debris.body);room.debris.splice(room.debris.indexOf(debris),1);}
@@ -598,10 +616,9 @@ wss.on('connection',(ws,req)=>{
    player.movedAt=now;
    const horiz=Math.hypot(m.pos.x-player.pos.x,m.pos.z-player.pos.z);
    if(horiz>15*delta+1.4||Math.abs(m.pos.x)>ARENA_LIMIT+2||Math.abs(m.pos.z)>ARENA_LIMIT+2||m.pos.y>22||m.pos.y<-4||Math.abs(m.pos.y-player.pos.y)>13*delta+2.5)return;
-   if(room.phase==='prep'&&Math.hypot(m.pos.x-player.home.x,m.pos.z-player.home.z)>16.5)return;
-   if(blockedPlayerPosition(m.pos))return;
-   if(room.rule==='fortress'&&Object.values(room.cores).some(c=>Math.hypot(m.pos.x-c.pos.x,m.pos.z-c.pos.z)<2.45))return;
-   if([...room.parts.values()].some(part=>Math.abs(m.pos.y-part.pos.y)<2.1&&Math.abs(m.pos.x-part.pos.x)<1.18&&Math.abs(m.pos.z-part.pos.z)<1.18))return;
+   if(room.phase==='prep'&&Math.hypot(m.pos.x-player.home.x,m.pos.z-player.home.z)>10.0)return sendCorrection(player);
+   if(blockedSweep(player.pos,m.pos,[...room.parts.values()],room.rule==='fortress'))return sendCorrection(player);
+   if(room.rule==='fortress'&&Object.values(room.cores).some(c=>Math.hypot(m.pos.x-c.pos.x,m.pos.z-c.pos.z)<2.45))return sendCorrection(player);
    player.pos=V(m.pos.x,m.pos.y,m.pos.z);
   }
   if(m.t==='look'&&validPosition(m.dir))player.shotDir=N(m.dir);
