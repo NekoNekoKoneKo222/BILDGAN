@@ -6,7 +6,8 @@ import {fileURLToPath} from 'node:url';
 import {WebSocket,WebSocketServer} from 'ws';
 import RAPIER from '@dimforge/rapier3d-compat';
 import {GAME_MS,ARENA_LIMIT,PREP_MS,BOSS_PREP_MS,TEAM_SCORE_TO_WIN,CORE_MAX_HP,GAME_RULES,PARTS,sanitizeGun,weaponStats,sanitizePlan,cleanName,clamp,validPosition} from './rules.js';
-import {ARENA_SOLIDS,CORE_LOCATIONS,blockedPlayerPosition,rayBoxDistance,nearestArenaHit} from '../shared/arena.js';
+import {ARENA_SOLIDS,CORE_LOCATIONS} from '../shared/arena.js';
+import {blockedActor,blockedSweep,nearestCover,clearSight,findBotPath} from '../shared/collision.js';
 
 await RAPIER.init();
 const app=express();
@@ -228,22 +229,30 @@ function place(room,player,m){
 
 function findHit(room,origin,dir,range,owner,ignoreId=''){
  let best=range,hit=null;
- const terrain=nearestArenaHit(origin,dir,range);
- if(terrain){best=terrain.distance;hit={type:'terrain',ref:terrain.solid,point:V(origin.x+dir.x*best,origin.y+dir.y*best,origin.z+dir.z*best)};}
- function test(pos,rad,type,ref){
-  const delta=V(pos.x-origin.x,pos.y-origin.y,pos.z-origin.z);
-  const t=delta.x*dir.x+delta.y*dir.y+delta.z*dir.z;
-  if(t<.2||t>best)return;
+ const cover=nearestCover(origin,dir,range,[...room.parts.values()],room.rule==='fortress'&&room.mode!=='boss',ARENA_SOLIDS,ignoreId);
+ if(cover){
+  const solid=cover.solid;best=cover.distance;
+  let type='terrain',ref=solid;
+  if(room.parts.has(solid.id)){type='part';ref=room.parts.get(solid.id);}
+  else if(solid.kind==='core'){
+   const team=solid.id.slice(-1);
+   type=team===resolveTeam(room,owner)?'terrain':'core';
+   ref=room.cores[team];
+  }
+  hit={type,ref,point:cover.point};
+ }
+ function target(pos,rad,type,ref){
+  const dx=pos.x-origin.x,dy=pos.y-origin.y,dz=pos.z-origin.z;
+  const t=dx*dir.x+dy*dir.y+dz*dir.z;
+  if(t<.2||t>=best)return;
   const q=V(origin.x+t*dir.x,origin.y+t*dir.y,origin.z+t*dir.z);
   if(D(q,pos)<=rad){best=t;hit={type,ref,point:q};}
  }
  const team=resolveTeam(room,owner);
- if(room.mode!=='boss')for(const p of allFighters(room))if(p.id!==owner&&p.alive&&p.team!==team)test(p.pos,.79,p.id.startsWith('BOT_')?'bot':'player',p);
- if(room.boss?.hp>0)test(room.boss.pos,2.6,'boss',room.boss);
- for(const part of room.parts.values())if(part.id!==ignoreId)test(part.pos,1.1,'part',part);
- if(room.rule==='fortress'&&room.mode!=='boss'){
-  for(const core of Object.values(room.cores))if(core.id!==team&&core.hp>0)test(core.pos,2.35,'core',core);
+ if(room.mode!=='boss')for(const p of allFighters(room)){
+  if(p.id!==owner&&p.alive&&p.team!==team)target(p.pos,.79,p.id.startsWith('BOT_')?'bot':'player',p);
  }
+ if(room.boss?.hp>0)target(room.boss.pos,2.6,'boss',room.boss);
  return hit;
 }
 
@@ -317,46 +326,58 @@ function interactPhysics(room,p,m){
 }
 function updateBot(room,bot,dt,now){
  if(!bot.alive){
-  if(now>=bot.respawnAt){bot.alive=true;bot.hp=100;bot.pos=spawn(bot.team,Number(bot.id.at(-1))||0);bot.shield=now+1400;}
+  if(now>=bot.respawnAt){
+   bot.alive=true;bot.hp=100;bot.pos=spawn(bot.team,Number(bot.id.at(-1))||0);
+   bot.shield=now+1400;bot.path=[];bot.nextPath=0;
+  }
   return;
  }
  if(room.phase!=='battle')return;
- const enemies=allFighters(room).filter(x=>x.alive&&x.team!==bot.team);
- const nearby=enemies.sort((a,b)=>D(a.pos,bot.pos)-D(b.pos,bot.pos));
- const target=nearby[0];
- let desired;
+ const enemies=allFighters(room).filter(x=>x.alive&&x.team!==bot.team).sort((a,b)=>D(a.pos,bot.pos)-D(b.pos,bot.pos));
+ const target=enemies[0];
+ let goal;
  if(room.rule==='relay'){
-  const r=room.relays.filter(x=>x.owner!==bot.team).sort((a,b)=>D(bot.pos,a.pos)-D(bot.pos,b.pos))[0];
-  desired=r?V(r.pos.x,1.65,r.pos.z):target?.pos;
+  const relay=room.relays.filter(x=>x.owner!==bot.team).sort((a,b)=>D(bot.pos,a.pos)-D(bot.pos,b.pos))[0];
+  goal=relay?V(relay.pos.x,1.65,relay.pos.z):target?.pos;
  }else if(room.rule==='fortress'){
-  const goal=room.cores[teamOpposite(bot.team)];
-  desired=target&&D(bot.pos,target.pos)<24?target.pos:V(goal.pos.x,1.65,goal.pos.z);
- }else desired=target?.pos;
- if(desired){
-  const vec=N(V(desired.x-bot.pos.x,0,desired.z-bot.pos.z));
-  const advance=target&&D(target.pos,bot.pos)<14?0:1;
-  const speed=4.25,delta=dt*speed;
-  let next=V(bot.pos.x+vec.x*delta*advance,1.65,bot.pos.z+vec.z*delta*advance);
-  if(blockedPlayerPosition(next)){
-   const side=bot.side;
-   next=V(bot.pos.x-vec.z*delta*side,1.65,bot.pos.z+vec.x*delta*side);
-   if(blockedPlayerPosition(next))bot.side=-bot.side;
-  }
-  if(!blockedPlayerPosition(next)){
-   bot.pos.x=clamp(next.x,-52,52);bot.pos.z=clamp(next.z,-52,52);
+  const core=room.cores[teamOpposite(bot.team)];
+  goal=target&&D(bot.pos,target.pos)<20?target.pos:V(core.pos.x,1.65,core.pos.z);
+ }else goal=target?.pos;
+ const parts=[...room.parts.values()],withCores=room.rule==='fortress';
+ if(goal){
+  const close=target&&D(target.pos,bot.pos)<10;
+  if(!close){
+   if(!bot.path?.length||now>=bot.nextPath){
+    bot.path=findBotPath(bot.pos,goal,parts,withCores);
+    bot.nextPath=now+1300+Math.floor(Math.random()*700);
+   }
+   while(bot.path?.length&&D(bot.pos,bot.path[0])<1.2)bot.path.shift();
+   const destination=bot.path?.[0]||goal;
+   const delta=N(V(destination.x-bot.pos.x,0,destination.z-bot.pos.z));
+   const step=Math.min(4.2*dt,Math.hypot(destination.x-bot.pos.x,destination.z-bot.pos.z));
+   const next=V(bot.pos.x+delta.x*step,1.65,bot.pos.z+delta.z*step);
+   if(!blockedSweep(bot.pos,next,parts,withCores)){
+    bot.pos.x=clamp(next.x,-52,52);bot.pos.z=clamp(next.z,-52,52);
+   }else{bot.nextPath=0;bot.path=[];}
   }
  }
- if(target&&D(bot.pos,target.pos)<32&&now>bot.shotAt){
-  // Lower CPU pressure: 1 shot every 1.3-1.9s, modest damage, limited accuracy.
-  bot.shotAt=now+rnd(1300,1900);
+ if(target&&D(bot.pos,target.pos)<34&&now>bot.shotAt){
+  bot.shotAt=now+rnd(1450,2050);
   const direction=N(V(target.pos.x-bot.pos.x,target.pos.y-bot.pos.y,target.pos.z-bot.pos.z));
   const hit=findHit(room,bot.pos,direction,34,bot.id);
-  const end=hit?.point||target.pos;
-  cast(room,{t:'shot',from:bot.pos,to:end,by:bot.id});
-  if(Math.random()<.66&&hit){
-   if(hit.type==='player'||hit.type==='bot')finishHit(room,bot,hit.ref,6.5,hit.type);
+  const end=hit?.point||V(bot.pos.x+direction.x*34,bot.pos.y+direction.y*34,bot.pos.z+direction.z*34);
+  cast(room,{t:'shot',from:bot.pos,to:end,by:bot.id,hitType:hit?.type||'none',core:'kinetic'});
+  if(Math.random()<.65&&hit){
+   if(hit.type==='player'||hit.type==='bot')finishHit(room,bot,hit.ref,6.0,hit.type);
    if(hit.type==='part')finishHit(room,bot,hit.ref,5.0,'part');
-   if(hit.type==='core')finishHit(room,bot,hit.ref,3.5,'core');
+  }
+ }else if(room.rule==='fortress'&&now>bot.shotAt){
+  const core=room.cores[teamOpposite(bot.team)];
+  const dir=N(V(core.pos.x-bot.pos.x,core.pos.y-bot.pos.y,core.pos.z-bot.pos.z));
+  const hit=findHit(room,bot.pos,dir,34,bot.id);
+  if(hit?.type==='core'){
+   bot.shotAt=now+rnd(1500,2100);finishHit(room,bot,hit.ref,3.8,'core');
+   cast(room,{t:'shot',from:bot.pos,to:hit.point,by:bot.id,hitType:'core',core:'kinetic'});
   }
  }
 }
