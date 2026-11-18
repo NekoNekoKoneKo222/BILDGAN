@@ -35,7 +35,7 @@ function makeRoom(mode){
  const world=new RAPIER.World(V(0,-13,0));world.timestep=1/30;
  world.createCollider(RAPIER.ColliderDesc.cuboid(62,.5,62).setTranslation(0,-.5,0).setFriction(.9));
  const room={id,mode,world,players:new Map(),parts:new Map(),debris:[],relays:[{id:'A',pos:V(-24,0,0),owner:'',progress:0,claimer:'',nextScore:0},{id:'B',pos:V(0,0,0),owner:'',progress:0,claimer:'',nextScore:0},{id:'C',pos:V(24,0,0),owner:'',progress:0,claimer:'',nextScore:0}],bot:null,boss:null,host:'',state:mode==='pvp'?'lobby':'running',created:Date.now(),started:0,last:Date.now(),events:[],result:null,lastSnapshot:0,tick:0};
- if(mode==='boss')room.boss={pos:V(0,3.2,0),hp:900,maxHp:900,phase:1,nextAttack:Date.now()+4500,attack:null,weakspot:0,lastSummon:0};
+ if(mode==='boss')room.boss={pos:V(0,3.2,0),hp:4700,maxHp:4700,phase:1,nextAttack:Date.now()+4500,attack:null,weakspot:0,lastSummon:0};
  rooms.set(id,room);
  return room;
 }
@@ -137,10 +137,11 @@ function explode(room,pos,radius,amount,source){
 }
 function addPart(room,owner,kind,pos,rotation){
  const spec=PARTS[kind];if(!spec||room.parts.size>=90)return null;
- const body=room.world.createRigidBody((spec.dynamic?RAPIER.RigidBodyDesc.dynamic():RAPIER.RigidBodyDesc.fixed()).setTranslation(pos.x,pos.y,pos.z).setCanSleep(true));
+ const desc=kind==='piston'?RAPIER.RigidBodyDesc.kinematicPositionBased():spec.dynamic?RAPIER.RigidBodyDesc.dynamic():RAPIER.RigidBodyDesc.fixed();
+ const body=room.world.createRigidBody(desc.setTranslation(pos.x,pos.y,pos.z).setCanSleep(true));
  const collider=RAPIER.ColliderDesc.cuboid(.88,.88,.88).setRestitution(kind==='spring'?.82:.1).setFriction(.8);
  room.world.createCollider(collider,body);
- const p={id:crypto.randomUUID(),kind,owner:owner?.id||'BOSS',pos:V(pos.x,pos.y,pos.z),rot:Math.trunc(rotation)||0,hp:spec.hp,body,at:Date.now(),next:0};
+ const p={id:crypto.randomUUID(),kind,owner:owner?.id||'BOSS',pos:V(pos.x,pos.y,pos.z),basePos:V(pos.x,pos.y,pos.z),rot:Math.trunc(rotation)||0,hp:spec.hp,body,at:Date.now(),next:0};
  room.parts.set(p.id,p);return p;
 }
 function place(room,player,m){
@@ -318,9 +319,21 @@ function tickRoom(room,dt,now){
   else{const all=[...room.players.values(),...(room.bot?[room.bot]:[])].sort((a,b)=>b.score-a.score||b.kills-a.kills);const top=all[0];finish(room,top?top.name+' が判定勝利':'時間切れ',top?.id||'');}
   return;
  }
+ for(const p of room.parts.values()){
+  if(p.kind==='piston'){
+   p.body.setNextKinematicTranslation(V(p.basePos.x,p.basePos.y+Math.sin((now-p.at)*.004)*1.1,p.basePos.z));
+  }
+  if(p.kind==='magnet'&&p.body.isDynamic()){
+   for(const q of room.parts.values()){
+    if(q.id===p.id||!q.body?.isDynamic()||D(q.pos,p.pos)>9.5)continue;
+    const d=N(V(p.pos.x-q.pos.x,p.pos.y-q.pos.y,p.pos.z-q.pos.z));
+    q.body.applyImpulse(V(d.x*.65,d.y*.65,d.z*.65),true);
+   }
+  }
+ }
  room.world.step();
  for(const p of room.parts.values()){
-  if(!p.body?.isDynamic())continue;
+  if(!p.body?.isDynamic()&&p.kind!=='piston')continue;
   const t=p.body.translation();p.pos=V(t.x,t.y,t.z);
   if(p.pos.y<-5)destroyPart(room,p);
  }
@@ -328,8 +341,17 @@ function tickRoom(room,dt,now){
   room.world.removeRigidBody(debris.body);
   room.debris.splice(room.debris.indexOf(debris),1);
  }
+ for(const rotor of room.parts.values())if(rotor.kind==='rotor'&&now>rotor.next){
+  rotor.next=now+650;
+  for(const p of room.players.values())if(p.alive&&D(p.pos,rotor.pos)<2.5)deal(room,p,10,rotor.owner);
+  if(room.bot?.alive&&D(room.bot.pos,rotor.pos)<2.5)deal(room,room.bot,10,rotor.owner);
+ }
  for(const p of room.players.values()){
   p.energy=Math.min(150,p.energy+dt*2.5);
+  if(p.reloadAt&&now>=p.reloadAt){
+   p.reloadAt=0;p.ammo=p.gun.mag;
+   send(p.ws,{t:'ammo',ammo:p.ammo,mag:p.gun.mag,reload:false});
+  }
   if(!p.alive&&now>=p.respawnAt){
    p.hp=100;p.alive=true;p.pos=spawn(Math.floor(Math.random()*4));p.shield=now+1800;p.ammo=p.gun.mag;p.reloadAt=0;p.grab=null;
    send(p.ws,{t:'respawn',pos:p.pos});cast(room,{t:'event',message:p.name+' RESPAWN'});
@@ -356,7 +378,7 @@ function snapshot(room,now){
  bot:room.bot?{id:room.bot.id,name:room.bot.name,pos:room.bot.pos,hp:Math.round(room.bot.hp),alive:room.bot.alive,kills:room.bot.kills,score:room.bot.score}:null,
  relays:room.mode==='boss'?[]:room.relays.map(r=>({id:r.id,pos:r.pos,owner:r.owner,progress:Math.round(r.progress),claimer:r.claimer})),
  boss:room.boss?{pos:room.boss.pos,hp:Math.max(0,Math.round(room.boss.hp)),maxHp:room.boss.maxHp,phase:room.boss.phase,weakspot:room.boss.weakspot}:null,
- parts:[...room.parts.values()].map(p=>({id:p.id,kind:p.kind,owner:p.owner,pos:p.pos,rot:p.rot,hp:Math.round(p.hp)})),
+ parts:[...room.parts.values()].map(p=>({id:p.id,kind:p.kind,owner:p.owner,pos:p.pos,rot:p.rot,angle:p.kind==='rotor'?((now-p.at)*.005):null,hp:Math.round(p.hp)})),
  debris:room.debris.slice(0,50).map(d=>({pos:d.body.translation(),size:d.half}))};
 }
 let prev=Date.now();setInterval(()=>{
@@ -385,7 +407,7 @@ wss.on('connection',(ws,req)=>{
    player=newPlayer(room,ws,m.name,m.gun,m.plan);
    if(room.mode==='solo'){room.bot=makeBot();room.started=Date.now();}
    if(room.mode==='boss'&&!room.started){room.started=Date.now();}
-   if(room.mode==='boss'&&room.players.size>1){room.boss.maxHp+=240;room.boss.hp+=240;}
+   if(room.mode==='boss'&&room.players.size>1){room.boss.maxHp+=1800;room.boss.hp+=1800;}
    room.last=Date.now();
    send(ws,{t:'welcome',id:room.id,mode:room.mode,playerId:player.id,pos:player.pos,ammo:player.ammo,gun:player.gun,inv:player.inv});
    if(room.state==='lobby')lobbyState(room);

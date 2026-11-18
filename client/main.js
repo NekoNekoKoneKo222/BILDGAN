@@ -6,9 +6,9 @@ const $=id=>document.getElementById(id);
 const palette={bg:0x06101a,floor:0x1b303b,cyan:0x53e2c2,orange:0xff9871,blue:0x5db9df,red:0xff5e72};
 const STORAGE='bildgan-v2-';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-const names={steel:'強化装甲',ramp:'斜面',barrel:'爆発タンク',spring:'ジャンプパッド',turret:'自動砲台',magnet:'磁力ブロック'};
-const hints={steel:'遮蔽物と高い耐久値',ramp:'高低差を作り射線を変える',barrel:'爆発と物理連鎖',spring:'ジャンプして奇襲',turret:'近くの敵を自動攻撃',magnet:'物理グラブで投げられる'};
-let gun=sanitizeGun(readJson('gun',DEFAULT_GUN)),plan=sanitizePlan(readJson('plan',DEFAULT_PLAN));
+const names={steel:'強化装甲',ramp:'斜面',barrel:'爆発タンク',spring:'ジャンプパッド',turret:'自動砲台',magnet:'磁力ブロック',piston:'昇降ピストン',rotor:'回転ブレード'};
+const hints={steel:'遮蔽物と高い耐久値',ramp:'高低差を作り射線を変える',barrel:'爆発と物理連鎖',spring:'ジャンプして奇襲',turret:'近くの敵を自動攻撃',magnet:'磁力で周囲の動的パーツを引く',piston:'周期的な昇降で物体を押し上げる',rotor:'近接する対象へ連続ダメージ'};
+let gun=sanitizeGun(readJson('gun',DEFAULT_GUN)),plan=sanitizePlan(readJson('plan',DEFAULT_PLAN)),stock={...plan};
 let stats=weaponStats(gun),chosenKind='steel',rotation=0,buildMode=false;
 let ws=null,gameMode='',roomId='',me='',connected=false,gameState=null,remaining=285,lobbyHost='';
 let currentHp=100,currentAmmo=stats.mag,currentEnergy=150,isReloading=false,grabId=null;
@@ -188,7 +188,7 @@ renderModules();renderPlan();
 $('nickname').value=localStorage.getItem(STORAGE+'name')||'SCRAPPER';
 $('nickname').addEventListener('change',()=>{localStorage.setItem(STORAGE+'name',$('nickname').value.slice(0,16));});
 function buildPart(kind,ghost=false){
- const group=new THREE.Group(),base=mat(({steel:0x65909b,ramp:0x7b95ad,barrel:0xc9694e,spring:0x50bd89,turret:0x48c9b7,magnet:0xa98ae6})[kind]||0x627d8a);
+ const group=new THREE.Group(),base=mat(({steel:0x65909b,ramp:0x7b95ad,barrel:0xc9694e,spring:0x50bd89,turret:0x48c9b7,magnet:0xa98ae6,piston:0xe8b868,rotor:0xef7e8f})[kind]||0x627d8a);
  if(ghost){base.transparent=true;base.opacity=.48;base.depthWrite=false;}
  const block=box(group,1.7,1.7,1.7,0,0,0,base);
  if(kind==='barrel'){
@@ -210,6 +210,14 @@ function buildPart(kind,ghost=false){
  if(kind==='turret'){
   const basePlate=new THREE.Mesh(new THREE.CylinderGeometry(.58,.62,.38,8),dark);basePlate.position.y=.98;group.add(basePlate);
   const cannon=new THREE.Mesh(new THREE.CylinderGeometry(.2,.2,1.55,10),bright);cannon.rotation.x=Math.PI/2;cannon.position.set(0,1.04,-.68);group.add(cannon);
+ }
+ if(kind==='piston'){
+  box(group,1.15,.65,1.15,0,1.08,0,bright);
+  box(group,.38,.9,.38,0,.55,0,dark);
+ }
+ if(kind==='rotor'){
+  for(let i=0;i<4;i++){const a=i*Math.PI/2;const blade=box(group,2.7,.2,.4,Math.sin(a)*.85,1,Math.cos(a)*.85,bright);blade.rotation.y=a;}
+  box(group,.65,.35,.65,0,1.05,0,dark);
  }
  if(kind==='magnet'){
   for(const x of [-.55,.55])box(group,.24,1.75,.25,x,0,-.85,bright);
@@ -300,7 +308,7 @@ function onPacket(m){
  if(m.t==='error'){toast(m.message||'接続エラー');returnToMenu();return;}
  if(m.t==='welcome'){
   me=m.playerId;roomId=m.id;connected=true;gameMode=m.mode;camera.position.set(m.pos.x,m.pos.y,m.pos.z);yaw=0;pitch=0;rotateCamera();
-  currentAmmo=m.ammo;stats=m.gun;plan=sanitizePlan(m.inv);currentEnergy=150;renderAmmo();setPhase(gameMode.toUpperCase());$('statusline').textContent='ROOM '+roomId;
+  currentAmmo=m.ammo;stats=m.gun;stock=sanitizePlan(m.inv);currentEnergy=150;renderAmmo();setPhase(gameMode.toUpperCase());$('statusline').textContent='ROOM '+roomId;
   return;
  }
  if(m.t==='lobby'){
@@ -315,7 +323,7 @@ function onPacket(m){
   $('waiting').hidden=true;playing=true;buildMode=false;remaining=285;currentHp=100;
   setPhase(gameMode==='boss'?'CORE BREAKER':'SCRAP CLASH');
   $('statusline').textContent='ルーム '+roomId+' · '+(gameMode==='boss'?'弱点を狙え':'リレー A / B / C を確保');
-  $('buildReadout').hidden=true;$('matchEnd').hidden=true;$('bossHud').hidden=gameMode!=='boss';
+  $('buildReadout').hidden=true;$('matchEnd').hidden=true;$('bossHud').hidden=gameMode!=='boss';$('inviteTop').hidden=gameMode==='solo';
   $('objectiveHud').style.display=gameMode==='boss'?'none':'flex';relayGroup.visible=gameMode!=='boss';
   if(!touchEnabled)toast('画面をクリックして視点固定 · Bで建築');
   else toast('右側をドラッグして視点移動');
@@ -335,7 +343,7 @@ function onPacket(m){
   if(isReloading)toast('リロード中 · '+Number(m.time).toFixed(1)+'秒');
   return;
  }
- if(m.t==='inventory'){plan=sanitizePlan(m.inv);return;}
+ if(m.t==='inventory'){stock=sanitizePlan(m.inv);return;}
  if(m.t==='grabbing'){grabId=m.id;toast(grabId?'物体を保持中 · 離すと投げます':'物体を投げました');return;}
  if(m.t==='shot'){
   flashLine(m.from,m.to,m.by===me?palette.cyan:palette.orange);if(m.by===me)muzzleFlash.intensity=5;return;
@@ -364,7 +372,7 @@ function applyState(s){
   currentHp=mine.hp;currentEnergy=mine.energy;respawning=!mine.alive;
   $('hpText').textContent=mine.alive?mine.hp:'DOWN';
   $('hpMeter').style.width=mine.hp+'%';
-  $('buildReadout').textContent=names[chosenKind]+' · '+(plan[chosenKind]||0)+'個 · '+currentEnergy+' EN';
+  $('buildReadout').textContent=names[chosenKind]+' · '+(stock[chosenKind]||0)+'個 · '+currentEnergy+' EN';
  }
  const board=$('scoreboard');board.replaceChildren();
  const all=[...s.players,...(s.bot?[s.bot]:[])].sort((a,b)=>b.score-a.score||b.kills-a.kills);
@@ -387,7 +395,7 @@ function applyState(s){
   seen.add(part.id);
   let view=partViews.get(part.id);
   if(!view){const root=buildPart(part.kind);root.userData.partId=part.id;partGroup.add(root);view={root,target:new THREE.Vector3(),rot:part.rot,kind:part.kind};partViews.set(part.id,view);}
-  view.target.set(part.pos.x,part.pos.y,part.pos.z);view.root.rotation.y=(part.rot||0)*Math.PI/2;
+  view.target.set(part.pos.x,part.pos.y,part.pos.z);view.root.rotation.y=part.angle===null?(part.rot||0)*Math.PI/2:part.angle;
  }
  for(const [id,view] of partViews)if(!seen.has(id)){partGroup.remove(view.root);partViews.delete(id);}
  if(s.boss){
@@ -447,7 +455,7 @@ function returnToMenu(){
  if(ws){const old=ws;ws=null;old.onclose=null;try{old.close();}catch{}}
  document.exitPointerLock?.();$('menu').hidden=false;$('waiting').hidden=true;$('matchEnd').hidden=true;
  $('scoreboard').replaceChildren();$('objectiveHud').replaceChildren();
- $('bossHud').hidden=true;relayGroup.visible=true;setPhase('GARAGE');
+ $('bossHud').hidden=true;$('inviteTop').hidden=true;relayGroup.visible=true;setPhase('GARAGE');
  $('statusline').textContent='';
  for(const view of remoteViews.values())remoteGroup.remove(view.root);remoteViews.clear();
  for(const view of partViews.values())partGroup.remove(view.root);partViews.clear();
@@ -461,8 +469,9 @@ $('join').onclick=()=>{
  if(!/^[0-9A-F]{6}$/.test(code)){toast('ルームコードは6桁の英数字です');return;}
  connect('pvp',code);
 };
-$('startRoom').onclick=()=>{send({t:'start'});if(!touchEnabled)renderer.domElement.requestPointerLock?.().catch(()=>{});};
+$('startRoom').onclick=()=>{send({t:'start'});if(!touchEnabled)Promise.resolve(renderer.domElement.requestPointerLock?.()).catch(()=>{});};
 $('leaveRoom').onclick=returnToMenu;
+$('inviteTop').onclick=()=>{const url=new URL(location.href);url.searchParams.set('room',roomId);navigator.clipboard?.writeText(url.href).then(()=>toast('招待URLをコピーしました')).catch(()=>toast('ルームID: '+roomId));};
 $('copyRoom').onclick=()=>{
  const url=new URL(location.href);url.searchParams.set('room',roomId);
  navigator.clipboard?.writeText(url.href).then(()=>toast('招待URLをコピーしました')).catch(()=>toast('コード: '+roomId));
@@ -488,7 +497,7 @@ function setBuild(value){
  if(!playing)return;
  buildMode=!!value;$('buildReadout').hidden=!buildMode;
  setPhase(buildMode?'CONSTRUCT':gameMode==='boss'?'CORE BREAKER':'SCRAP CLASH');
- toast(buildMode?'建築モード · 1〜6 パーツ選択':'戦闘モード');
+ toast(buildMode?'建築モード · 1〜8 パーツ選択':'戦闘モード');
 }
 function getAimPart(){
  aimRay.setFromCamera(new THREE.Vector2(0,0),camera);
@@ -530,7 +539,7 @@ document.addEventListener('keydown',e=>{
  if(e.code==='KeyR'&&buildMode)rotation=(rotation+1)%4;
  else if(e.code==='KeyR'||e.code==='KeyF'){if(playing)send({t:'reload'});}
  if(e.code==='KeyQ'&&playing)send({t:'emote',emote:'ナイス！'});
- if(/^Digit[1-6]$/.test(e.code))changeKind(Object.keys(PARTS)[Number(e.code[5])-1]);
+ if(/^Digit[1-8]$/.test(e.code))changeKind(Object.keys(PARTS)[Number(e.code[5])-1]);
 });
 document.addEventListener('keyup',e=>{key[e.code]=false;});
 window.addEventListener('blur',()=>{for(const k of Object.keys(key))key[k]=false;fireHeld=false;grabStop();});
@@ -576,9 +585,6 @@ let lastFrame=performance.now();
 function loop(now){
  requestAnimationFrame(loop);const dt=clamp((now-lastFrame)/1000,.001,.05);lastFrame=now;
  const menuOpen=!$('menu').hidden;
- if(playing&&!$('waiting').hidden===false){
-  // This condition is intentionally bypassed: waiting lobby has its own interaction layer.
- }
  if(playing&&$('waiting').hidden&&$('matchEnd').hidden){
   const ahead=Number(key.KeyW||key.ArrowUp)-Number(key.KeyS||key.ArrowDown)-stick.y;
   const sideways=Number(key.KeyD||key.ArrowRight)-Number(key.KeyA||key.ArrowLeft)+stick.x;

@@ -6,7 +6,9 @@ export const PARTS = Object.freeze({
   barrel:{name:'爆発タンク',cost:18,hp:42,dynamic:true},
   spring:{name:'ジャンプパッド',cost:20,hp:100,dynamic:false},
   turret:{name:'自動砲台',cost:35,hp:90,dynamic:false},
-  magnet:{name:'磁力ブロック',cost:26,hp:88,dynamic:true}
+  magnet:{name:'磁力ブロック',cost:26,hp:88,dynamic:true},
+  piston:{name:'昇降ピストン',cost:30,hp:105,dynamic:false},
+  rotor:{name:'回転ブレード',cost:32,hp:95,dynamic:false}
 });
 export const GUN_MODULES = Object.freeze({
  frame:{balanced:{name:'スタンダード',damage:0,rate:0,recoil:0,spread:0,mag:0},light:{name:'ライト',damage:-2,rate:1.5,recoil:-0.4,spread:0.01,mag:0},heavy:{name:'ヘビー',damage:4,rate:-1.2,recoil:1.1,spread:-0.002,mag:0}},
@@ -16,7 +18,7 @@ export const GUN_MODULES = Object.freeze({
  optic:{iron:{name:'アイアン',spread:0,recoil:0},stabilizer:{name:'安定化',spread:-0.009,recoil:-0.6},target:{name:'マークスマン',spread:-0.013,recoil:0.55}}
 });
 export const DEFAULT_GUN = Object.freeze({frame:'balanced',barrel:'standard',core:'kinetic',mag:'balanced',optic:'iron'});
-export const DEFAULT_PLAN = Object.freeze({steel:3,ramp:1,barrel:1,spring:1,turret:1,magnet:0});
+export const DEFAULT_PLAN = Object.freeze({steel:3,ramp:1,barrel:1,spring:1,turret:1,magnet:0,piston:0,rotor:0});
 export const MAX_BUILD_PIECES = 12;
 export function clamp(n,lo,hi){return Math.max(lo,Math.min(hi,n))}
 export function cleanName(name){return String(name||'SCRAPPER').replace(/[<>\n\r]/g,'').trim().slice(0,16)||'SCRAPPER'}
@@ -28,7 +30,7 @@ export function sanitizeGun(source={}){
 }
 export function weaponStats(raw){
   const gun=sanitizeGun(raw);
-  let damage=15,rate=6.1,spread=.029,recoil=1.5,range=68;
+  let damage=12,rate=6.1,spread=.029,recoil=1.5,range=68;
   for(const [slot,key] of Object.entries(gun)){
     const mod=GUN_MODULES[slot][key];
     damage+=(mod.damage||0);rate+=(mod.rate||0);
