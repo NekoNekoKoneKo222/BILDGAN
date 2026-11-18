@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {PARTS,GUN_MODULES,DEFAULT_GUN,DEFAULT_PLAN,MAX_BUILD_PIECES,weaponStats,sanitizeGun,sanitizePlan} from '../server/rules.js';
 import './style.css';
 import {readMoveAxes} from '../shared/movement.js';
+import {ARENA_SOLIDS,CORE_LOCATIONS,blockedPlayerPosition} from '../shared/arena.js';
 
 const $=id=>document.getElementById(id);
 // Daylight arena: prioritize silhouettes, target visibility and readable building pieces.
@@ -12,7 +13,7 @@ const names={steel:'強化装甲',ramp:'斜面',barrel:'爆発タンク',spring:
 const hints={steel:'遮蔽物と高い耐久値',ramp:'高低差を作り射線を変える',barrel:'爆発と物理連鎖',spring:'ジャンプして奇襲',turret:'近くの敵を自動攻撃',magnet:'磁力で周囲の動的パーツを引く',piston:'周期的な昇降で物体を押し上げる',rotor:'近接する対象へ連続ダメージ'};
 let gun=sanitizeGun(readJson('gun',DEFAULT_GUN)),plan=sanitizePlan(readJson('plan',DEFAULT_PLAN)),stock={...plan};
 let stats=weaponStats(gun),chosenKind='steel',rotation=0,buildMode=false;
-let ws=null,gameMode='',roomId='',me='',connected=false,gameState=null,remaining=285,lobbyHost='';
+let ws=null,gameMode='',gameRule='fortress',matchPhase='prep',myTeam='A',myHome=null,myReady=false,roomId='',me='',connected=false,gameState=null,remaining=285,lobbyHost='';
 let currentHp=100,currentAmmo=stats.mag,currentEnergy=150,isReloading=false,grabId=null;
 let playing=false,fireHeld=false,grabHeld=false,locked=false,respawning=false,lastMove=0,lastLook=0,lastFire=0,lastClock=0,menuTab='play';
 let toastTimer=0;
@@ -160,6 +161,9 @@ box(arm,.14,.35,.16,0,-.25,.14,metal);
 box(arm,.3,.08,.14,0,.18,-.2,bright);
 const muzzle=new THREE.Mesh(new THREE.CylinderGeometry(.055,.072,.4,9),mat(0x06121d,.9));muzzle.rotation.x=Math.PI/2;muzzle.position.z=-.85;arm.add(muzzle);
 const muzzleFlash=new THREE.PointLight(0xffd4a7,0,8);muzzleFlash.position.set(0,.02,-1);viewWeapon.add(muzzleFlash);
+const coreGlow=new THREE.Mesh(new THREE.TorusGeometry(.21,.05,8,16),new THREE.MeshBasicMaterial({color:0x72f6db}));
+coreGlow.rotation.y=Math.PI/2;coreGlow.position.z=-.18;arm.add(coreGlow);
+const coreColors={kinetic:0x5debcf,plasma:0xe393ff,pulse:0x76f6a1,scatter:0xffc868,breaker:0xff7f69};
 let yaw=0,pitch=0,vy=0,onGround=true,shotKick=0,stepPhase=0;
 // Spawn and respawn always face the center of the fighting area.
 function orientTowardArena(){
@@ -231,6 +235,10 @@ function setTab(tab){
  document.querySelectorAll('.pane').forEach(x=>x.hidden=x.id!==tab);
 }
 document.querySelectorAll('.tab').forEach(x=>x.addEventListener('click',()=>setTab(x.dataset.tab)));
+const storedRule=localStorage.getItem(STORAGE+'rule')||'fortress';
+$('ruleSelect').value=['fortress','relay','skirmish'].includes(storedRule)?storedRule:'fortress';
+$('ruleSelect').addEventListener('change',()=>{localStorage.setItem(STORAGE+'rule',$('ruleSelect').value);gameRule=$('ruleSelect').value;});
+gameRule=$('ruleSelect').value;
 function renderModules(){
  $('moduleList').replaceChildren();
  for(const [slot,options] of Object.entries(GUN_MODULES)){
@@ -254,12 +262,13 @@ function refreshGun(){
   const text=document.createElement('span');text.className='statValue';text.textContent=value;
   r.append(l,track,text);host.append(r);
  }
- $('buildAdvice').textContent='射撃間隔 '+stats.ms+'ms / リロード '+stats.reload.toFixed(2)+'秒 / 有効射程 '+stats.range+'m。高火力は連射が遅く、軽量型は反動を抑えやすくなります。';
+ $('buildAdvice').textContent='固有効果：'+stats.trait+'。 射撃間隔 '+stats.ms+'ms / リロード '+stats.reload.toFixed(2)+'秒 / 射程 '+stats.range+'m。弾の種類により戦い方が変化します。';
  $('weaponName').textContent=GUN_MODULES.barrel[gun.barrel].name.toUpperCase()+' / '+GUN_MODULES.core[gun.core].name.toUpperCase();
  $('weaponMeta').textContent='DMG '+stats.damage+'  ·  '+stats.rpm+' RPM';
  $('gunPreview').textContent=gun.barrel==='long'?'▰━━━━━━━━╾':gun.barrel==='short'?'▰━━╾':'▰━━━━╾';
  barrelMesh.scale.z=gun.barrel==='long'?1.55:gun.barrel==='short'?.65:1;
  viewWeapon.scale.setScalar(gun.frame==='heavy'?1.1:gun.frame==='light'?.87:1);
+ coreGlow.material.color.setHex(coreColors[gun.core]||0x5debcf);
  currentAmmo=stats.mag;renderAmmo();
 }
 $('saveWeapon').onclick=()=>{store('gun',gun);toast('武器の設計を保存しました');playTone(640,.1);};
@@ -330,15 +339,63 @@ function buildPart(kind,ghost=false){
  group.userData.kind=kind;
  return group;
 }
+// Objectives are rendered from the same coordinates the server uses for damage.
+const coreGroup=new THREE.Group();scene.add(coreGroup);
+const coreModels=new Map();
+for(const [team,location] of Object.entries(CORE_LOCATIONS)){
+ const group=new THREE.Group();group.position.set(location.x,0,location.z);
+ const c=new THREE.MeshBasicMaterial({color:team==='A'?0x4ff5d3:0xff986e});
+ box(group,4.6,.65,4.6,0,.3,0,new THREE.MeshBasicMaterial({color:0x355568}));
+ const shell=new THREE.Mesh(new THREE.OctahedronGeometry(2.25,0),c);
+ shell.position.y=2.05;group.add(shell);
+ for(const x of [-2.4,2.4])for(const z of [-2.4,2.4])box(group,.4,3.5,.4,x,1.75,z,new THREE.MeshBasicMaterial({color:0xffffff}));
+ const ring=new THREE.Mesh(new THREE.TorusGeometry(3.1,.18,8,40),new THREE.MeshBasicMaterial({color:team==='A'?0x34ceb0:0xffa882}));
+ ring.rotation.x=Math.PI/2;ring.position.y=.2;group.add(ring);
+ const label=makeBeaconLabel('CORE '+team,team==='A'?'#52dfbe':'#ff9575');label.position.y=7.1;group.add(label);
+ coreGroup.add(group);coreModels.set(team,{group,shell,c,ring});
+}
+coreGroup.visible=false;
 const partGroup=new THREE.Group();scene.add(partGroup);
 const partViews=new Map();
 const ghost=buildPart(chosenKind,true);scene.add(ghost);ghost.visible=false;
+// Eight quick-select slots are clickable on iPad; number keys remain on PC.
+function refreshHotbar(){
+ const bar=$('buildHotbar');bar.replaceChildren();
+ for(const [index,kind] of Object.keys(PARTS).entries()){
+  const button=document.createElement('button');button.type='button';button.className='buildSlot';
+  if(kind===chosenKind)button.classList.add('selected');
+  if((stock[kind]||0)===0)button.classList.add('empty');
+  button.textContent=(index+1)+' · '+names[kind];
+  const count=document.createElement('b');count.textContent=stock[kind]??0;button.append(count);
+  button.onclick=()=>{changeKind(kind);playTone(490,.04);};
+  bar.append(button);
+ }
+}
+function updateMatchPhase(){
+ if(!playing)return;
+ const prep=matchPhase==='prep';
+ $('prepHud').hidden=!prep;$('readyBuild').disabled=myReady;
+ $('readyBuild').textContent=myReady?'準備完了済み（待機中）':'準備完了（全員準備で開戦）';
+ if(prep)buildMode=true;
+ $('buildReadout').hidden=!buildMode;
+ $('buildHotbar').hidden=!buildMode;
+ $('objectiveHud').style.display=gameRule==='relay'?'flex':'none';
+ $('coreHud').hidden=gameRule!=='fortress';
+ coreGroup.visible=gameRule==='fortress';relayGroup.visible=gameRule==='relay';
+ setPhase(prep?'BUILD TIME':gameMode==='boss'?'CORE BREAKER':gameRule==='fortress'?'CORE SIEGE':gameRule==='relay'?'RELAY CLASH':'TEAM DEATHMATCH');
+ refreshHotbar();
+}
+$('readyBuild').onclick=()=>{
+ if(matchPhase!=='prep'||myReady)return;
+ myReady=true;send({t:'ready'});updateMatchPhase();toast('自分の建築作業を完了。ほかのプレイヤーを待っています');
+};
 function changeKind(kind){
  if(!PARTS[kind])return;
  chosenKind=kind;ghost.clear();
  const fresh=buildPart(kind,true);
  while(fresh.children.length)ghost.add(fresh.children[0]);
  $('buildReadout').textContent=names[chosenKind]+' · '+PARTS[chosenKind].cost+'EN · Rで回転';
+ refreshHotbar();
 }
 const relayGroup=new THREE.Group();scene.add(relayGroup);
 const relays=new Map();
@@ -385,6 +442,9 @@ function canPlace(){
  const snap=v=>Math.round(v/2)*2;
  point.set(snap(point.x),Math.max(.95,Math.round((point.y-.95)/2)*2+.95),snap(point.z));
  if(point.distanceTo(camera.position)>10.5||Math.abs(point.x)>54||Math.abs(point.z)>54||point.y>12)return null;
+ if(matchPhase==='prep'&&myHome&&Math.hypot(point.x-myHome.x,point.z-myHome.z)>16)return null;
+ if(ARENA_SOLIDS.some(s=>Math.abs(point.x-s.pos.x)<s.half.x+1&&Math.abs(point.z-s.pos.z)<s.half.z+1&&Math.abs(point.y-s.pos.y)<s.half.y+1))return null;
+ if(gameRule==='fortress'&&Object.values(CORE_LOCATIONS).some(core=>Math.hypot(point.x-core.x,point.z-core.z)<3.3))return null;
  return point;
 }
 function makePlacement(){
