@@ -21,7 +21,7 @@ function channel(ws){
    const i=queue.findIndex(predicate);if(i>=0)return Promise.resolve(queue.splice(i,1)[0]);
    return new Promise((resolve,reject)=>{
     const waiter={predicate,resolve,timer:null};
-    waiter.timer=setTimeout(()=>{waiters.splice(waiters.indexOf(waiter),1);reject(new Error('Timed out waiting for message'))},limit);
+    waiter.timer=setTimeout(()=>{waiters.splice(waiters.indexOf(waiter),1);reject(new Error('Timed out waiting for message '+predicate.toString().slice(0,120)+' last='+JSON.stringify(queue.slice(-3))))},limit);
     waiters.push(waiter);
    });
   },
