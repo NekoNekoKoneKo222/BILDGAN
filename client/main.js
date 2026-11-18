@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {PARTS,GUN_MODULES,DEFAULT_GUN,DEFAULT_PLAN,MAX_BUILD_PIECES,weaponStats,sanitizeGun,sanitizePlan} from '../server/rules.js';
 import './style.css';
+import {readMoveAxes} from '../shared/movement.js';
 
 const $=id=>document.getElementById(id);
 // Daylight arena: prioritize silhouettes, target visibility and readable building pieces.
@@ -719,10 +720,10 @@ function diagnosticSample(now){
  const point=new THREE.Vector3(0,1,0).project(camera);
  const inside=point.z>-1&&point.z<1&&Math.abs(point.x)<1&&Math.abs(point.y)<1;
  const stats='Draw calls: '+info.calls+' · Triangles: '+info.triangles+
-  '\\nCamera: '+pos.x.toFixed(1)+', '+pos.y.toFixed(1)+', '+pos.z.toFixed(1)+
-  '\\nLook: '+dir.x.toFixed(2)+', '+dir.y.toFixed(2)+', '+dir.z.toFixed(2)+
-  '\\nArena center in view: '+(inside?'YES':'NO')+
-  '\\nWebGL: '+renderer.capabilities.isWebGL2+' · Canvas: '+renderer.domElement.width+'x'+renderer.domElement.height;
+  '\nCamera: '+pos.x.toFixed(1)+', '+pos.y.toFixed(1)+', '+pos.z.toFixed(1)+
+  '\nLook: '+dir.x.toFixed(2)+', '+dir.y.toFixed(2)+', '+dir.z.toFixed(2)+
+  '\nArena center in view: '+(inside?'YES':'NO')+
+  '\nWebGL: '+renderer.capabilities.isWebGL2+' · Canvas: '+renderer.domElement.width+'x'+renderer.domElement.height;
  let uniform='unknown';
  try{
   const gl=renderer.getContext(),pixels=[];
@@ -734,11 +735,11 @@ function diagnosticSample(now){
   const variation=Math.max(...[0,1,2].map(ch=>Math.max(...pixels.map(p=>p[ch]))-Math.min(...pixels.map(p=>p[ch]))));
   uniform=variation<8?'YES (nearly solid color)':'NO';
  }catch(err){uniform='unavailable';}
- renderStats=stats+'\\nBlank-looking canvas: '+uniform+(renderError?'\\nERROR: '+renderError:'');
+ renderStats=stats+'\nBlank-looking canvas: '+uniform+(renderError?'\nERROR: '+renderError:'');
  if(diagVisible)diagPanel.textContent=renderStats;
  if(info.calls===0||info.triangles===0||uniform.startsWith('YES')){
   blankChecks++;
-  if(blankChecks>=2){diagVisible=true;diagPanel.hidden=false;calibrationCube.visible=true;diagPanel.textContent='3Dシーンの描画に異常を検出しました。緑の四角が見えるか確認してください。\\n'+renderStats;}
+  if(blankChecks>=2){diagVisible=true;diagPanel.hidden=false;calibrationCube.visible=true;diagPanel.textContent='3Dシーンの描画に異常を検出しました。緑の四角が見えるか確認してください。\n'+renderStats;}
  }else blankChecks=0;
  // Non-sensitive drawing stats are logged server-side to make a reproducible bug report possible.
  if(connected&&blankChecks>=2)send({t:'clientdiag',drawCalls:info.calls,triangles:info.triangles,centerInside:inside,uniform});
@@ -746,9 +747,16 @@ function diagnosticSample(now){
 function loop(now){
  requestAnimationFrame(loop);try{const dt=clamp((now-lastFrame)/1000,.001,.05);lastFrame=now;
  const menuOpen=!$('menu').hidden;
+ // Defensively recover from non-finite positions instead of silently rendering empty sky.
+ if(playing&&(!Number.isFinite(camera.position.x)||!Number.isFinite(camera.position.y)||!Number.isFinite(camera.position.z))){
+  const remote=gameState?.players?.find(p=>p.id===me);
+  const valid=remote?.pos&&[remote.pos.x,remote.pos.y,remote.pos.z].every(Number.isFinite);
+  const p=valid?remote.pos:{x:-27,y:1.65,z:-24};
+  camera.position.set(p.x,p.y,p.z);vy=0;onGround=true;orientTowardArena();
+  toast('カメラ位置の不具合を自動修復しました');
+ }
  if(playing&&$('waiting').hidden&&$('matchEnd').hidden){
-  const ahead=Number(key.KeyW||key.ArrowUp)-Number(key.KeyS||key.ArrowDown)-stick.y;
-  const sideways=Number(key.KeyD||key.ArrowRight)-Number(key.KeyA||key.ArrowLeft)+stick.x;
+  const {ahead,sideways}=readMoveAxes(key,stick);
   const speed=(key.ShiftLeft?10.5:7.1)*(gun.frame==='heavy'?.92:gun.frame==='light'?1.06:1);
   const front=new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw)),right=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw));
   const move=front.multiplyScalar(ahead).addScaledVector(right,sideways);
