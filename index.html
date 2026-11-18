@@ -25,6 +25,9 @@
     <div id="damageOverlay"></div>
     <div id="eventFeed"></div>
     <div id="objectiveHud"></div>
+    <div id="coreHud" hidden></div>
+    <div id="prepHud" hidden><div class="prepTitle">INDIVIDUAL BUILD TIME <strong id="prepClock">0:50</strong></div><p>各自の設計エリアで防衛設備を組み立てよう。建築中は敵の射撃・拠点占領なし。</p><button id="readyBuild" class="cta">準備完了（全員準備で開戦）</button></div>
+    <div id="buildHotbar" hidden aria-label="建築パーツの選択"></div>
     <div id="bossHud" hidden><div class="bossLabel">CORE BREAKER <span id="bossPhase">PHASE 1</span></div><div class="meter bossMeter"><div id="bossMeter"></div></div></div>
     <div id="lowHud">
       <div class="health"><div class="caption">STRUCTURAL INTEGRITY <b id="hpText">100</b></div><div class="meter"><div id="hpMeter"></div></div></div>
@@ -61,14 +64,22 @@
           <div>
             <div class="sectionTitle">SELECT YOUR BATTLE <small>全モード5分以内</small></div>
             <div class="modes">
-              <button class="modeCard" id="solo"><b>01 <strong>SOLO SCRIMMAGE</strong></b><span>CPUとの1v1。気軽に試してビルドを磨く。</span><small>BOT DUEL · 1 PLAYER</small></button>
-              <button class="modeCard" id="pvp"><b>02 <strong>SCRAP CLASH</strong></b><span>拠点を奪って得点。友達と最大4人で乱闘。</span><small>PVP · 1–4 PLAYERS</small></button>
+              <button class="modeCard" id="solo"><b>01 <strong>SOLO TEAM BATTLE</strong></b><span>味方CPU1体＋敵CPU2体。1人でも2対2の戦術対戦。</span><small>2V2 · YOU + ALLY BOT VS 2 BOTS</small></button>
+              <button class="modeCard" id="pvp"><b>02 <strong>TEAM CLASH</strong></b><span>友達と2対2。人数不足は味方・敵CPUで補充。</span><small>PVP · 2V2 · BOT FILL</small></button>
               <button class="modeCard" id="boss"><b>03 <strong>CORE BREAKER</strong></b><span>パターンを見切り、弱点を破壊する協力戦。</span><small>CO-OP · 1–4 PLAYERS</small></button>
             </div>
           </div>
           <aside class="aside">
             <div class="sectionTitle">YOUR IDENTITY</div><label class="fieldLabel" for="nickname">PLAYER NAME</label><input id="nickname" maxlength="16" autocomplete="off" value="SCRAPPER" />
             <div class="sectionTitle spaceTop">DISPLAY SETTINGS</div><label class="fieldLabel" for="brightnessSetting">画面の明るさ <span id="brightnessPercent">135%</span></label><input id="brightnessSetting" type="range" min="80" max="200" step="5" value="135"/><p class="subText">昼間の明るい戦場を基準に調整できます。試合中は [ / ] キーでも変更できます。</p>
+            <div class="sectionTitle spaceTop">MATCH RULES</div>
+            <label class="fieldLabel" for="ruleSelect">ゲームの勝利条件</label>
+            <select id="ruleSelect" aria-label="ゲームルール">
+              <option value="fortress">コア攻防戦（おすすめ）— 個人建築50秒 → 敵コア破壊</option>
+              <option value="relay">拠点争奪戦 — 個人建築50秒 → 3拠点を確保</option>
+              <option value="skirmish">即時戦闘 — 建築準備なし・撃破数で勝負</option>
+            </select>
+            <p class="subText">準備はチーム共有ではなく各プレイヤー個人。準備完了後、または50秒経過で戦闘が始まります。</p>
             <div class="sectionTitle spaceTop">JOIN FRIENDS</div><label class="fieldLabel" for="joinCode">INVITE CODE</label>
             <div class="inline"><input id="joinCode" maxlength="6" placeholder="6文字のコード" /><button id="join" class="cta">参加</button></div>
             <div class="divider"></div>
@@ -78,21 +89,21 @@
         </div>
       </section>
       <section id="weapon" class="pane" hidden>
-        <div class="sectionTitle">WEAPON LAB <small>5モジュールを自由に組み替える</small></div>
+        <div class="sectionTitle">WEAPON LAB <small>5モジュールで弾の性質・扱いやすさもカスタム</small></div>
         <div class="columns">
-          <div><p class="subText">どんな組み合わせでも使える代わりに、火力・連射・反動・リロードには必ずトレードオフがあります。武器は無課金、全パーツを最初から使用できます。</p><div id="moduleList"></div><div class="actions"><button id="saveWeapon" class="cta">武器を保存</button><button id="resetWeapon" class="secondary">初期化</button></div></div>
+          <div><p class="subText">キネティック・範囲爆発・EMP・拡散・構造破壊の弾を選択。火力・精度・連射・機動力にトレードオフがあります。全パーツは最初から使用できます。</p><div id="moduleList"></div><div class="actions"><button id="saveWeapon" class="cta">武器を保存</button><button id="resetWeapon" class="secondary">初期化</button></div></div>
           <aside class="aside"><div class="sectionTitle">LIVE WEAPON DATA</div><div class="gunPreview" id="gunPreview">▰━━━━╾</div><div id="weaponStats"></div><p class="subText" id="buildAdvice"></p></aside>
         </div>
       </section>
       <section id="build" class="pane" hidden>
         <div class="sectionTitle">CONSTRUCTION LAB <small>フィールド用の防衛装置を保存</small></div>
-        <p class="subText">戦闘中はBで建築モードを切り替え。装置はサーバーの物理演算で動き、爆発・射撃・衝突で破壊されます。最初は拠点を守るシンプルな配置がおすすめ。</p>
+        <p class="subText">建築時間は各プレイヤーが個人作業。自分のエリアに装甲・タレット・物理装置を配置して守りを作れます。戦闘が始まってからも追加設置でき、破壊された部品は補充されます。</p>
         <div class="buildLab" id="buildLab"></div>
         <div class="actions"><button id="savePlan" class="cta">防衛キットを保存</button><button id="clearPlan" class="secondary">初期化</button></div>
         <div class="hintCard">試合では建築エネルギーの上限があります。最初から全マシンを無限に置けるわけではありません。</div>
       </section>
       <section id="guide" class="pane" hidden>
-        <div class="guideGrid"><div><h3>5 MINUTES TO WIN</h3><p>銃だけでなく、中央のエネルギー拠点を占領して得点。倒されてもリスポーンできるので、最後まで逆転が狙えます。</p></div><div><h3>BUILD ON THE FLY</h3><p>物理グラブで落ちたパーツを運ぶ。建築モードでは装甲、バネ、砲台、爆発バレルを組み合わせて戦場を変えます。</p></div><div><h3>BOSS MECHANICS</h3><p>ボスはHPに応じて行動が変化し、足元の危険範囲を予告。弱点を撃つことでダメージが増えます。</p></div><div><h3>CONTROLS</h3><p>WASD移動・Spaceジャンプ・Shiftダッシュ。左クリック射撃、右クリックで物体をつかみ、離すと投げる。B建築、1〜8パーツ選択、R回転。</p></div></div>
+        <div class="guideGrid"><div><h3>5 MINUTES TO WIN</h3><p>標準はコア攻防戦。最初の50秒は各自が個人建築し、銃撃・得点は停止。戦闘開始後は敵コアを破壊したチームが勝ち。別ルールでは拠点占領・撃破数も選択できます。</p></div><div><h3>BUILD ON THE FLY</h3><p>ポール・装甲・建造物に当たり判定があります。撃たれた弾は遮蔽物で遮られ、CPUも壁越しに攻撃できません。戦闘中にもパーツ補充があり、設計で防衛・侵攻が変わります。</p></div><div><h3>BOSS MECHANICS</h3><p>ボスはHPに応じて行動が変化し、足元の危険範囲を予告。弱点を撃つことでダメージが増えます。</p></div><div><h3>CONTROLS</h3><p>WASD移動・Spaceジャンプ・Shiftダッシュ。左クリック射撃、右クリックで物体をつかむ。B建築、1〜8パーツ選択、R回転。iPadでは建築用のパーツ選択バーで操作。</p></div></div>
         <div class="hintCard">公開前テスト中のビルドです。まずはソロを試し、その後フレンド用ルームでPvPや協力ボス戦を遊んでください。</div>
       </section>
     </div>
