@@ -455,14 +455,14 @@ function makePlacement(){
 function send(obj){if(ws?.readyState===WebSocket.OPEN){try{ws.send(JSON.stringify(obj))}catch{}}}
 function connect(mode,invite=''){
  if(ws){ws.onclose=null;ws.close();}
- gameMode=mode;connected=false;playing=false;gameState=null;me='';roomId='';
+ gameMode=mode;gameRule=$('ruleSelect').value;matchPhase='prep';myReady=false;myHome=null;connected=false;playing=false;gameState=null;me='';roomId='';
  $('menu').hidden=true;$('waiting').hidden=true;$('matchEnd').hidden=true;
  setPhase('CONNECTING');$('statusline').textContent='サーバーに接続中…';
  const host=location.host,protocol=location.protocol==='https:'?'wss:':'ws:';
  try{ws=new WebSocket(protocol+'//'+host+'/socket');}
  catch{toast('WebSocketの起動に失敗しました');returnToMenu();return;}
  ws.onopen=()=>{
-  send({t:'join',mode,room:invite,name:$('nickname').value.slice(0,16),gun,plan});
+  send({t:'join',mode,room:invite,rule:gameRule,name:$('nickname').value.slice(0,16),gun,plan});
  };
  ws.onmessage=e=>{let data;try{data=JSON.parse(e.data)}catch{return;}onPacket(data);};
  ws.onerror=()=>{toast('サーバーとの接続に失敗しました');};
@@ -471,7 +471,7 @@ function connect(mode,invite=''){
 function onPacket(m){
  if(m.t==='error'){toast(m.message||'接続エラー');returnToMenu();return;}
  if(m.t==='welcome'){
-  me=m.playerId;roomId=m.id;connected=true;gameMode=m.mode;camera.position.set(m.pos.x,m.pos.y,m.pos.z);orientTowardArena();
+  me=m.playerId;roomId=m.id;connected=true;gameMode=m.mode;gameRule=m.rule||gameRule;myTeam=m.team||'A';myHome={...m.pos};camera.position.set(m.pos.x,m.pos.y,m.pos.z);orientTowardArena();
   currentAmmo=m.ammo;stats=m.gun;stock=sanitizePlan(m.inv);currentEnergy=150;renderAmmo();setPhase(gameMode.toUpperCase());$('statusline').textContent='ROOM '+roomId;
   return;
  }
@@ -484,14 +484,19 @@ function onPacket(m){
   return;
  }
  if(m.t==='begin'){
-  $('waiting').hidden=true;playing=true;buildMode=false;remaining=285;currentHp=100;
+  $('waiting').hidden=true;playing=true;matchPhase=m.phase||'battle';gameRule=m.rule||gameRule;myReady=false;buildMode=matchPhase==='prep';remaining=285;currentHp=100;
   setPhase(gameMode==='boss'?'CORE BREAKER':'SCRAP CLASH');
   $('statusline').textContent='ルーム '+roomId+' · '+(gameMode==='boss'?'弱点を狙え':'リレー A / B / C を確保');
   $('buildReadout').hidden=true;$('matchEnd').hidden=true;$('bossHud').hidden=gameMode!=='boss';$('inviteTop').hidden=gameMode==='solo';
-  $('objectiveHud').style.display=gameMode==='boss'?'none':'flex';relayGroup.visible=gameMode!=='boss';
-  if(!touchEnabled)toast('アリーナ中心を向いて開始！ 白いRELAY標識を目指そう · クリックで視点固定');
+  updateMatchPhase();
+  if(!touchEnabled)toast(matchPhase==='prep'?'個人建築タイム：自分のエリアに設備を設置しよう':'攻防開始！ Bで建築');
   else toast('右側をドラッグして視点移動');
   playTone(700,.25);
+  return;
+ }
+ if(m.t==='phase'){
+  matchPhase=m.phase;updateMatchPhase();
+  if(matchPhase==='battle'){toast('建築完了！ 戦闘開始');playTone(730,.18);}
   return;
  }
  if(m.t==='state'){applyState(m);return;}
@@ -507,10 +512,10 @@ function onPacket(m){
   if(isReloading)toast('リロード中 · '+Number(m.time).toFixed(1)+'秒');
   return;
  }
- if(m.t==='inventory'){stock=sanitizePlan(m.inv);return;}
+ if(m.t==='inventory'){stock=sanitizePlan(m.inv);refreshHotbar();return;}
  if(m.t==='grabbing'){grabId=m.id;toast(grabId?'物体を保持中 · 離すと投げます':'物体を投げました');return;}
  if(m.t==='shot'){
-  flashLine(m.from,m.to,m.by===me?palette.cyan:palette.orange);if(m.by===me)muzzleFlash.intensity=5;return;
+  flashLine(m.from,m.to,m.by===me?(coreColors[m.core]||palette.cyan):palette.orange);if(m.by===me)muzzleFlash.intensity=5;return;
  }
  if(m.t==='break'){burst(m.pos,palette.orange);playTone(190,.15,'sawtooth',.02);return;}
  if(m.t==='explosion'){shockRing(m.pos,m.radius,palette.orange,350);burst(m.pos,0xffaf7e);playTone(130,.24,'sawtooth',.07);return;}
@@ -529,9 +534,18 @@ function renderAmmo(){
  $('ammoText').textContent=isReloading?'RELOAD':currentAmmo+' / '+stats.mag;
 }
 function applyState(s){
- gameState=s;remaining=s.remaining;$('timer').textContent=String(Math.floor(remaining/60)).padStart(2,'0')+':'+String(remaining%60).padStart(2,'0');
+ gameState=s;remaining=s.remaining;
+ if(s.phase&&s.phase!==matchPhase){matchPhase=s.phase;updateMatchPhase();}
+ $('timer').textContent=String(Math.floor(remaining/60)).padStart(2,'0')+':'+String(remaining%60).padStart(2,'0');
+ if(matchPhase==='prep'){
+  const seconds=s.prepRemaining||0;
+  $('prepClock').textContent='0:'+String(seconds).padStart(2,'0');
+ }
+ gameRule=s.rule||gameRule;
  const mine=s.players.find(x=>x.id===me);
  if(mine){
+  myTeam=mine.team||'A';myReady=!!mine.ready;
+  if(matchPhase==='prep'){$('readyBuild').disabled=myReady;$('readyBuild').textContent=myReady?'準備完了済み（待機中）':'準備完了（全員準備で開戦）';}
   if(mine.hp<currentHp){$('damageOverlay').style.opacity='.7';setTimeout(()=>$('damageOverlay').style.opacity='0',300);playTone(170,.10,'sawtooth',.04);}
   currentHp=mine.hp;currentEnergy=mine.energy;respawning=!mine.alive;
   $('hpText').textContent=mine.alive?mine.hp:'DOWN';
@@ -539,8 +553,16 @@ function applyState(s){
   $('buildReadout').textContent=names[chosenKind]+' · '+(stock[chosenKind]||0)+'個 · '+currentEnergy+' EN';
  }
  const board=$('scoreboard');board.replaceChildren();
- const all=[...s.players,...(s.bot?[s.bot]:[])].sort((a,b)=>b.score-a.score||b.kills-a.kills);
- for(const p of all){
+ const all=[...s.players,...(s.bots||[])].sort((a,b)=>b.score-a.score||b.kills-a.kills);
+ if(gameMode!=='boss'){
+  for(const team of ['A','B']){
+   const el=document.createElement('div');el.className='score'+(team===myTeam?' mine':'');
+   const n=document.createElement('small');n.textContent='TEAM '+team+(team===myTeam?' · YOU':'');
+   const v=document.createElement('strong');v.textContent=gameRule==='fortress'?(s.cores?.[team]?.hp??0).toFixed(0):s.teamScores?.[team]??0;
+   el.append(n,v);board.append(el);
+  }
+ }
+ for(const p of gameMode==='boss'?all:[]){
   const el=document.createElement('div');el.className='score'+(p.id===me?' mine':'')+(!p.alive?' dead':'');
   const n=document.createElement('small');n.textContent=p.name;
   const v=document.createElement('strong');v.textContent=gameMode==='boss'?p.kills:p.score;
@@ -549,7 +571,7 @@ function applyState(s){
  for(const p of all){
   if(p.id===me)continue;
   let view=remoteViews.get(p.id);
-  if(!view){view={root:makeFighter(p.id==='BOT'?0xfca837:0xe95847),target:new THREE.Vector3()};remoteViews.set(p.id,view);remoteGroup.add(view.root);}
+  if(!view){view={root:makeFighter(p.team===myTeam?0x37b6ec:0xe95847),target:new THREE.Vector3()};remoteViews.set(p.id,view);remoteGroup.add(view.root);}
   view.target.set(p.pos.x,p.pos.y-.2,p.pos.z);view.root.visible=p.alive;
   view.root.userData.hp=p.hp;
  }
@@ -570,10 +592,27 @@ function applyState(s){
   $('bossPhase').textContent='PHASE '+s.boss.phase;
   $('bossMeter').style.width=(100*s.boss.hp/s.boss.maxHp)+'%';
  }else bossMesh.visible=false;
- if(gameMode!=='boss'){
+ coreGroup.visible=gameMode!=='boss'&&gameRule==='fortress';
+ relayGroup.visible=gameMode!=='boss'&&gameRule==='relay';
+ $('coreHud').hidden=gameMode==='boss'||gameRule!=='fortress';
+ if(gameRule==='fortress'&&s.cores){
+  const boxHud=$('coreHud');boxHud.replaceChildren();
+  for(const [team,core] of Object.entries(s.cores)){
+   const hp=Math.max(0,Math.ceil(core.hp));const el=document.createElement('div');
+   el.className='coreRow'+(team===myTeam?' mine':' enemy');
+   const label=document.createElement('label');label.textContent='CORE '+team+(team===myTeam?' (防衛)':' (攻撃)');
+   const value=document.createElement('strong');value.textContent=hp+' / '+core.maxHp;
+   el.append(label,value);boxHud.append(el);
+   const model=coreModels.get(team);if(model){
+    model.shell.scale.setScalar(.55+.45*hp/core.maxHp);
+    model.shell.material.color.setHex(hp<core.maxHp*.35?0xff505e:team==='A'?0x4ff5d3:0xff986e);
+   }
+  }
+ }
+ if(gameRule==='relay'){
   const hud=$('objectiveHud');hud.replaceChildren();
   for(const relay of s.relays){
-   const own=relay.owner===me,enemy=relay.owner&&!own;
+   const own=relay.owner===myTeam,enemy=relay.owner&&!own;
    const el=document.createElement('div');el.className='relay'+(own?' owned':enemy?' enemy':'');
    el.textContent='RELAY '+relay.id+' · '+(own?'YOU':enemy?'ENEMY':'NEUTRAL')+(relay.progress>0&&relay.owner!==relay.claimer?' · '+relay.progress+'%':'');
    hud.append(el);
@@ -615,11 +654,11 @@ function showResult(m){
  playTone(victory?750:310,.38);
 }
 function returnToMenu(){
- playing=false;connected=false;gameState=null;roomId='';me='';grabId=null;
+ playing=false;connected=false;gameState=null;roomId='';me='';grabId=null;myHome=null;myReady=false;matchPhase='battle';
  if(ws){const old=ws;ws=null;old.onclose=null;try{old.close();}catch{}}
  document.exitPointerLock?.();$('menu').hidden=false;$('waiting').hidden=true;$('matchEnd').hidden=true;
  $('scoreboard').replaceChildren();$('objectiveHud').replaceChildren();
- $('bossHud').hidden=true;$('inviteTop').hidden=true;relayGroup.visible=true;setPhase('GARAGE');
+ $('bossHud').hidden=true;$('inviteTop').hidden=true;$('prepHud').hidden=true;$('buildHotbar').hidden=true;$('coreHud').hidden=true;coreGroup.visible=false;relayGroup.visible=true;setPhase('GARAGE');
  $('statusline').textContent='';
  for(const view of remoteViews.values())remoteGroup.remove(view.root);remoteViews.clear();
  for(const view of partViews.values())partGroup.remove(view.root);partViews.clear();
@@ -647,7 +686,7 @@ const qs=new URLSearchParams(location.search);if(/^[0-9A-F]{6}$/i.test(qs.get('r
 }
 fetch('/healthz',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).then(()=>$('networkStatus').textContent='SERVER ONLINE').catch(()=>$('networkStatus').textContent='LOCAL CLIENT / SERVER UNAVAILABLE');
 function fire(){
- if(!playing||buildMode||respawning||!connected)return;
+ if(!playing||buildMode||matchPhase==='prep'||respawning||!connected)return;
  if(isReloading||currentAmmo<=0)return;
  const now=performance.now();if(now-lastFire<stats.ms)return;
  lastFire=now;currentAmmo--;renderAmmo();
@@ -659,7 +698,8 @@ function build(){if(!playing||!connected||respawning)return;makePlacement();}
 function trigger(){if(buildMode)build();else fire();}
 function setBuild(value){
  if(!playing)return;
- buildMode=!!value;$('buildReadout').hidden=!buildMode;
+ if(matchPhase==='prep'&&!value){toast('個人建築時間中は建築に専念できます');return;}
+ buildMode=!!value;$('buildReadout').hidden=!buildMode;$('buildHotbar').hidden=!buildMode;refreshHotbar();
  setPhase(buildMode?'CONSTRUCT':gameMode==='boss'?'CORE BREAKER':'SCRAP CLASH');
  toast(buildMode?'建築モード · 1〜8 パーツ選択':'戦闘モード');
 }
@@ -740,6 +780,9 @@ if(touchEnabled){
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 function collide(x,z){
  if(Math.abs(x)>54||Math.abs(z)>54)return true;
+ if(blockedPlayerPosition({x,y:camera.position.y,z}))return true;
+ if(gameRule==='fortress'&&gameMode!=='boss'&&Object.values(CORE_LOCATIONS).some(core=>Math.hypot(x-core.x,z-core.z)<2.45))return true;
+ if(matchPhase==='prep'&&myHome&&Math.hypot(x-myHome.x,z-myHome.z)>16.5)return true;
  if(!gameState)return false;
  for(const p of gameState.parts){
   if(Math.abs(camera.position.y-p.pos.y)>2.0)continue;
