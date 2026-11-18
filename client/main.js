@@ -239,7 +239,7 @@ function buildPulse(pos){
 function impactEffect(pos,type){
  if(!pos||type==='none')return;
  const color=type==='terrain'?0xffdda6:type==='part'?0xffd57e:type==='core'?0xf7a9ff:type==='boss'?0xff876a:0x74ffff;
- impactFlare(pos,color,type==='core'?.7:.25);
+ impactFlare(pos,color,type==='core'?0.7:0.25);
  if(type==='part'||type==='core'||type==='boss')burst(pos,color);
  if(type==='terrain'&&effectsQuality==='high')burst(pos,color);
 }
@@ -469,9 +469,16 @@ const aimRay=new THREE.Raycaster();aimRay.far=11;
 function canPlace(){
  aimRay.setFromCamera(new THREE.Vector2(0,0),camera);
  const hits=aimRay.intersectObjects([ground,...[...partViews.values()].map(x=>x.root)],true);
- if(!hits.length)return null;
- const hit=hits[0],normal=hit.face?.normal?.clone()?.transformDirection(hit.object.matrixWorld)||new THREE.Vector3(0,1,0);
- const point=hit.point.clone().addScaledVector(normal,.95);
+ const hit=hits[0];
+ let point;
+ if(hit){
+  const normal=hit.face?.normal?.clone()?.transformDirection(hit.object.matrixWorld)||new THREE.Vector3(0,1,0);
+  point=hit.point.clone().addScaledVector(normal,.95);
+ }else{
+  // Horizontal FPS aim still allows building: project onto ground 5m ahead.
+  const aim=forward();point=camera.position.clone().addScaledVector(aim,5.25);
+  point.y=.95;
+ }
  const snap=v=>Math.round(v/2)*2;
  point.set(snap(point.x),Math.max(.95,Math.round((point.y-.95)/2)*2+.95),snap(point.z));
  if(point.distanceTo(camera.position)>10.5||Math.abs(point.x)>54||Math.abs(point.z)>54||point.y>12)return null;
@@ -519,7 +526,7 @@ function onPacket(m){
  if(m.t==='begin'){
   $('waiting').hidden=true;playing=true;matchPhase=m.phase||'battle';gameRule=m.rule||gameRule;myReady=false;buildMode=matchPhase==='prep';remaining=285;currentHp=100;
   setPhase(gameMode==='boss'?'CORE BREAKER':'SCRAP CLASH');
-  $('statusline').textContent='ルーム '+roomId+' · '+(gameMode==='boss'?'弱点を狙え':'リレー A / B / C を確保');
+  $('statusline').textContent='ルーム '+roomId+' · '+(gameMode==='boss'?'弱点を狙え':gameRule==='fortress'?'自陣コアを守り、敵コアを破壊':gameRule==='relay'?'3つのリレーを確保':'撃破数で勝利');
   $('buildReadout').hidden=true;$('matchEnd').hidden=true;$('bossHud').hidden=gameMode!=='boss';$('inviteTop').hidden=gameMode==='solo';
   updateMatchPhase();
   if(!touchEnabled)toast(matchPhase==='prep'?'個人建築タイム：自分のエリアに設備を設置しよう':'攻防開始！ Bで建築');
@@ -560,7 +567,7 @@ function onPacket(m){
   return;
  }
  if(m.t==='break'){burst(m.pos,palette.orange);impactFlare(m.pos,0xffad69,.8);shockRing(m.pos,1.2,0xffa46c,380);playTone(190,.15,'sawtooth',.02);return;}
- if(m.t==='explosion'){shockRing(m.pos,m.radius,palette.orange,m.minor?250:480);impactFlare(m.pos,m.minor?0xbd86fa:0xffbd75,m.minor?.7:1.7);burst(m.pos,0xffaf7e);playTone(m.minor?260:130,m.minor?.1:.24,'sawtooth',m.minor?.025:.055);return;}
+ if(m.t==='explosion'){shockRing(m.pos,m.radius,palette.orange,m.minor?250:480);impactFlare(m.pos,m.minor?0xbd86fa:0xffbd75,m.minor?0.7:1.7);burst(m.pos,0xffaf7e);playTone(m.minor?260:130,m.minor?0.1:0.24,'sawtooth',m.minor?0.025:0.055);return;}
  if(m.t==='telegraph'){
   const tint=m.kind==='wave'?0xfbbd60:0xff6c6c;
   shockRing(m.pos,m.radius,tint,1200);feed('⚠ '+(m.kind==='wave'?'衝撃波をジャンプで避けろ！':'赤い範囲から離れろ！'));playTone(275,.2,'sawtooth',.035);return;
@@ -742,7 +749,7 @@ function setBuild(value){
  if(!playing)return;
  if(matchPhase==='prep'&&!value){toast('個人建築時間中は建築に専念できます');return;}
  buildMode=!!value;$('buildReadout').hidden=!buildMode;$('buildHotbar').hidden=!buildMode;refreshHotbar();
- setPhase(buildMode?'CONSTRUCT':gameMode==='boss'?'CORE BREAKER':'SCRAP CLASH');
+ setPhase(buildMode?'CONSTRUCT':gameMode==='boss'?'CORE BREAKER':gameRule==='fortress'?'CORE SIEGE':gameRule==='relay'?'RELAY CLASH':'TEAM DEATHMATCH');
  toast(buildMode?'建築モード · 1〜8 パーツ選択':'戦闘モード');
 }
 function getAimPart(){
