@@ -3,7 +3,8 @@ import {PARTS,GUN_MODULES,DEFAULT_GUN,DEFAULT_PLAN,MAX_BUILD_PIECES,weaponStats,
 import './style.css';
 
 const $=id=>document.getElementById(id);
-const palette={bg:0x06101a,floor:0x1b303b,cyan:0x53e2c2,orange:0xff9871,blue:0x5db9df,red:0xff5e72};
+// Daylight arena: prioritize silhouettes, target visibility and readable building pieces.
+const palette={bg:0xb4d9e8,floor:0x748f87,cyan:0x3cf9dd,orange:0xffa367,blue:0x3185b2,red:0xff5962};
 const STORAGE='bildgan-v2-';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const names={steel:'強化装甲',ramp:'斜面',barrel:'爆発タンク',spring:'ジャンプパッド',turret:'自動砲台',magnet:'磁力ブロック',piston:'昇降ピストン',rotor:'回転ブレード'};
@@ -20,23 +21,29 @@ renderer.setPixelRatio(Math.min(devicePixelRatio,touchEnabled?1:1.5));
 renderer.setSize(innerWidth,innerHeight);
 renderer.outputColorSpace=THREE.SRGBColorSpace;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure=1.32;
+// Accessible exposure adjustment; stored locally so brightness survives reloads.
+const savedBrightness=Number(localStorage.getItem('bildgan-v2-brightness'));
+let brightness=Number.isFinite(savedBrightness)&&savedBrightness>=80&&savedBrightness<=200?savedBrightness:135;
+renderer.toneMappingExposure=brightness/100;
 renderer.shadowMap.enabled=false;
 renderer.domElement.style.touchAction='none';
 $('root').prepend(renderer.domElement);
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(palette.bg);
-scene.fog=new THREE.FogExp2(palette.bg,.011);
+scene.fog=new THREE.FogExp2(palette.bg,.0036);
 const camera=new THREE.PerspectiveCamera(78,innerWidth/innerHeight,.08,185);
 camera.rotation.order='YXZ';
 camera.position.set(0,1.65,32);
-const hemi=new THREE.HemisphereLight(0x9fd0eb,0x17252f,1.6);scene.add(hemi);
-const sun=new THREE.DirectionalLight(0xffd8a3,2.1);sun.position.set(16,39,-28);scene.add(sun);
-const accent=new THREE.PointLight(0x27e5bf,3,60);accent.position.set(0,14,0);scene.add(accent);
-const mat=(color,metalness=.5,roughness=.48)=>new THREE.MeshStandardMaterial({color,metalness,roughness});
-const metal=mat(0x2c4654,.82),dark=mat(0x142b35,.73),bright=mat(0x42cbb5,.6),floorMaterial=mat(palette.floor,.78,.7);
+const ambient=new THREE.AmbientLight(0xffffff,1.45);scene.add(ambient);
+const hemi=new THREE.HemisphereLight(0xe0f5ff,0x91b1a4,2.25);scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xfff3dc,3.1);sun.position.set(20,44,-24);scene.add(sun);
+const fill=new THREE.DirectionalLight(0xb8e5ff,1.3);fill.position.set(-25,20,32);scene.add(fill);
+const accent=new THREE.PointLight(0x37ffc8,2.1,55);accent.position.set(0,14,0);scene.add(accent);
+// Metals without an environment map render nearly black. Use semi-matte materials for this arena.
+const mat=(color,metalness=.22,roughness=.76)=>new THREE.MeshStandardMaterial({color,metalness,roughness});
+const metal=mat(0x829cad,.26,.66),dark=mat(0x466578,.14,.78),bright=mat(0x35d2bc,.18,.58),floorMaterial=mat(palette.floor,.05,.92);
 const ground=new THREE.Mesh(new THREE.PlaneGeometry(124,124),floorMaterial);ground.rotation.x=-Math.PI/2;ground.userData.ground=true;scene.add(ground);
-const grid=new THREE.GridHelper(122,61,0x287466,0x284f5a);grid.position.y=.013;scene.add(grid);
+const grid=new THREE.GridHelper(122,61,0xb2e7d7,0x92b8b2);grid.position.y=.013;scene.add(grid);
 const trim=new THREE.Group();scene.add(trim);
 const box=(parent,w,h,d,x,y,z,m)=>{const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y,z);parent.add(o);return o};
 for(let i=-3;i<=3;i++)for(const side of [-1,1]){
@@ -81,6 +88,19 @@ function forward(){const out=new THREE.Vector3();camera.getWorldDirection(out);r
 function net(v){return {x:v.x,y:v.y,z:v.z};}
 function readJson(key,fallback){try{return JSON.parse(localStorage.getItem(STORAGE+key)||'null')??structuredClone(fallback)}catch{return structuredClone(fallback)}}
 function store(key,data){try{localStorage.setItem(STORAGE+key,JSON.stringify(data))}catch{}}
+function setBrightness(raw){
+ brightness=clamp(Math.round(Number(raw)||135),80,200);
+ renderer.toneMappingExposure=brightness/100;
+ $('brightnessSetting').value=String(brightness);
+ $('brightnessPercent').textContent=brightness+'%';
+ $('brightnessQuick').value=String(brightness);
+ $('brightnessQuickValue').textContent=brightness+'%';
+ try{localStorage.setItem(STORAGE+'brightness',String(brightness));}catch{}
+}
+$('brightnessSetting').addEventListener('input',e=>setBrightness(e.target.value));
+$('brightnessQuick').addEventListener('input',e=>setBrightness(e.target.value));
+setBrightness(brightness);
+
 const particles=[],effectGroup=new THREE.Group();scene.add(effectGroup);
 function addEffect(mesh,duration=450,expand=0){effectGroup.add(mesh);particles.push({mesh,start:performance.now(),duration,expand});}
 function flashLine(a,b,color=palette.cyan){
@@ -248,7 +268,7 @@ for(const [id,x] of [['A',-24],['B',0],['C',24]]){
 }
 const remoteGroup=new THREE.Group();scene.add(remoteGroup);
 const remoteViews=new Map();
-function makeFighter(color=0xff936c){
+function makeFighter(color=0xff693e){
  const root=new THREE.Group();
  const m=mat(color,.6),black=mat(0x10232b,.75);
  box(root,.85,1.05,.55,0,-.35,0,m);
@@ -385,7 +405,7 @@ function applyState(s){
  for(const p of all){
   if(p.id===me)continue;
   let view=remoteViews.get(p.id);
-  if(!view){view={root:makeFighter(p.id==='BOT'?palette.orange:0xa2b8da),target:new THREE.Vector3()};remoteViews.set(p.id,view);remoteGroup.add(view.root);}
+  if(!view){view={root:makeFighter(p.id==='BOT'?0xfca837:0xe95847),target:new THREE.Vector3()};remoteViews.set(p.id,view);remoteGroup.add(view.root);}
   view.target.set(p.pos.x,p.pos.y-.2,p.pos.z);view.root.visible=p.alive;
   view.root.userData.hp=p.hp;
  }
@@ -535,6 +555,8 @@ document.addEventListener('keydown',e=>{
  key[e.code]=true;
  if(['Space','ArrowUp','ArrowDown'].includes(e.code))e.preventDefault();
  if(e.repeat)return;
+ if(e.code==='BracketRight')setBrightness(brightness+10);
+ if(e.code==='BracketLeft')setBrightness(brightness-10);
  if(e.code==='KeyB')setBuild(!buildMode);
  if(e.code==='KeyR'&&buildMode)rotation=(rotation+1)%4;
  else if(e.code==='KeyR'||e.code==='KeyF'){if(playing)send({t:'reload'});}

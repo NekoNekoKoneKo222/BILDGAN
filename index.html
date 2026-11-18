@@ -16,6 +16,7 @@
       <div class="timer" id="timer">05:00</div>
     </header>
     <div id="statusline"></div>
+    <label id="quickBrightness" class="quickBrightness">☀ 明るさ <input id="brightnessQuick" type="range" min="80" max="200" step="5" value="135" aria-label="試合中の画面の明るさ"/><span id="brightnessQuickValue">135%</span></label>
     <div id="scoreboard"></div>
     <div id="crosshair"><span></span><span></span><span></span><span></span></div>
     <div id="hitmarker">✦</div>
@@ -65,6 +66,7 @@
           </div>
           <aside class="aside">
             <div class="sectionTitle">YOUR IDENTITY</div><label class="fieldLabel" for="nickname">PLAYER NAME</label><input id="nickname" maxlength="16" autocomplete="off" value="SCRAPPER" />
+            <div class="sectionTitle spaceTop">DISPLAY SETTINGS</div><label class="fieldLabel" for="brightnessSetting">画面の明るさ <span id="brightnessPercent">135%</span></label><input id="brightnessSetting" type="range" min="80" max="200" step="5" value="135"/><p class="subText">昼間の明るい戦場を基準に調整できます。試合中は [ / ] キーでも変更できます。</p>
             <div class="sectionTitle spaceTop">JOIN FRIENDS</div><label class="fieldLabel" for="joinCode">INVITE CODE</label>
             <div class="inline"><input id="joinCode" maxlength="6" placeholder="6文字のコード" /><button id="join" class="cta">参加</button></div>
             <div class="divider"></div>
