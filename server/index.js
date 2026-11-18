@@ -403,7 +403,7 @@ wss.on('connection',(ws,req)=>{
    const mode=['pvp','solo','boss'].includes(m.mode)?m.mode:'solo';
    room=invite?rooms.get(invite):makeRoom(mode);
    if(!room)return send(ws,{t:'error',message:'ルームを作成できません。時間をおいてください'});
-   if(room.players.size>=PLAYER_MAX||room.mode==='solo'&&room.players.size>0||room.state==='ended'||room.state==='running'&&room.mode!=='boss'||room.state==='running'&&Date.now()-room.started>60000)return send(ws,{t:'error',message:'満員または参加できないルームです'});
+   if(room.players.size>=PLAYER_MAX||room.mode==='solo'&&room.players.size>0||room.state==='ended'||(invite&&room.state==='running'&&room.mode!=='boss')||(invite&&room.state==='running'&&Date.now()-room.started>60000))return send(ws,{t:'error',message:'満員または参加できないルームです'});
    player=newPlayer(room,ws,m.name,m.gun,m.plan);
    if(room.mode==='solo'){room.bot=makeBot();room.started=Date.now();}
    if(room.mode==='boss'&&!room.started){room.started=Date.now();}
