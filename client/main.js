@@ -489,7 +489,7 @@ function fire(){
  lastFire=now;currentAmmo--;renderAmmo();
  const d=forward();send({t:'shoot',dir:net(d)});
  playTone(gun.core==='plasma'?410:170,.06,'sawtooth',.026);
- shotKick=stats.recoil*.017;muzzleFlash.intensity=4;
+ shotKick=stats.recoil*.017;pitch=clamp(pitch-stats.recoil*.010*(touchEnabled?.72:1),-1.48,1.48);yaw+=(Math.random()-.5)*stats.spread*.22;rotateCamera();muzzleFlash.intensity=4;
 }
 function build(){if(!playing||!connected||respawning)return;makePlacement();}
 function trigger(){if(buildMode)build();else fire();}
@@ -588,7 +588,7 @@ function loop(now){
  if(playing&&$('waiting').hidden&&$('matchEnd').hidden){
   const ahead=Number(key.KeyW||key.ArrowUp)-Number(key.KeyS||key.ArrowDown)-stick.y;
   const sideways=Number(key.KeyD||key.ArrowRight)-Number(key.KeyA||key.ArrowLeft)+stick.x;
-  const speed=key.ShiftLeft?10.5:7.1;
+  const speed=(key.ShiftLeft?10.5:7.1)*(gun.frame==='heavy'?.92:gun.frame==='light'?1.06:1);
   const front=new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw)),right=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw));
   const move=front.multiplyScalar(ahead).addScaledVector(right,sideways);
   if(move.length()>1)move.normalize();
