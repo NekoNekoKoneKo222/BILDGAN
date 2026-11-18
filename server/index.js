@@ -389,7 +389,7 @@ function updateRelays(room,dt,now){
 }
 
 function updateBoss(room,dt,now){
- const boss=room.boss;if(!boss||room.state!=='running')return;
+ const boss=room.boss;if(!boss||room.state!=='running'||room.phase!=='battle')return;
  if(boss.hp<=0){finish(room,'CORE BREAKER 撃破！','TEAM');return;}
  const ratio=boss.hp/boss.maxHp;
  const phase=ratio>.67?1:ratio>.34?2:3;
@@ -443,48 +443,46 @@ function updateTurrets(room,now){
 }
 
 function tickRoom(room,dt,now){
- if(room.state==='lobby')return;
- if(room.state==='ended')return;
+ if(room.state!=='running'||!room.started)return;
  if(now-room.started>=GAME_MS){
-  if(room.mode==='boss')finish(room,'制限時間終了 · ボスを倒せなかった');
-  else{const all=[...room.players.values(),...(room.bot?[room.bot]:[])].sort((a,b)=>b.score-a.score||b.kills-a.kills);const top=all[0];finish(room,top?top.name+' が判定勝利':'時間切れ',top?.id||'');}
+  if(room.mode==='boss')finish(room,'時間切れ · ボスを倒せなかった');
+  else if(room.rule==='fortress'){
+   const winner=room.cores.A.hp>room.cores.B.hp?'A':room.cores.B.hp>room.cores.A.hp?'B':room.teamScores.A>=room.teamScores.B?'A':'B';
+   finish(room,'時間切れ · 残りのコアHPで判定、TEAM '+winner+' 勝利',winner);
+  }else{
+   const winner=room.teamScores.A>=room.teamScores.B?'A':'B';
+   finish(room,'時間切れ · TEAM '+winner+' が判定勝利',winner);
+  }
   return;
  }
- for(const p of room.parts.values()){
-  if(p.kind==='piston'){
-   p.body.setNextKinematicTranslation(V(p.basePos.x,p.basePos.y+Math.sin((now-p.at)*.004)*1.1,p.basePos.z));
-  }
-  if(p.kind==='magnet'&&p.body.isDynamic()){
+ if(room.phase==='prep'&&(now>=room.prepEndsAt||[...room.players.values()].every(p=>p.ready)))startBattle(room);
+ for(const part of room.parts.values()){
+  if(part.kind==='piston')part.body.setNextKinematicTranslation(V(part.basePos.x,part.basePos.y+Math.sin((now-part.at)*.004)*1.1,part.basePos.z));
+  if(part.kind==='magnet'&&part.body.isDynamic()){
    for(const q of room.parts.values()){
-    if(q.id===p.id||!q.body?.isDynamic()||D(q.pos,p.pos)>9.5)continue;
-    const d=N(V(p.pos.x-q.pos.x,p.pos.y-q.pos.y,p.pos.z-q.pos.z));
+    if(q.id===part.id||!q.body?.isDynamic()||D(q.pos,part.pos)>9.5)continue;
+    const d=N(V(part.pos.x-q.pos.x,part.pos.y-q.pos.y,part.pos.z-q.pos.z));
     q.body.applyImpulse(V(d.x*.65,d.y*.65,d.z*.65),true);
    }
   }
  }
  room.world.step();
- for(const p of room.parts.values()){
-  if(!p.body?.isDynamic()&&p.kind!=='piston')continue;
-  const t=p.body.translation();p.pos=V(t.x,t.y,t.z);
-  if(p.pos.y<-5)destroyPart(room,p);
+ for(const part of [...room.parts.values()]){
+  if(!part.body?.isDynamic()&&part.kind!=='piston')continue;
+  const t=part.body.translation();part.pos=V(t.x,t.y,t.z);
+  if(part.pos.y<-5)destroyPart(room,part);
  }
- for(const debris of [...room.debris])if(now-debris.at>5500){
-  room.world.removeRigidBody(debris.body);
-  room.debris.splice(room.debris.indexOf(debris),1);
- }
- for(const rotor of room.parts.values())if(rotor.kind==='rotor'&&now>rotor.next){
-  rotor.next=now+650;
-  for(const p of room.players.values())if(p.alive&&D(p.pos,rotor.pos)<2.5)deal(room,p,10,rotor.owner);
-  if(room.bot?.alive&&D(room.bot.pos,rotor.pos)<2.5)deal(room,room.bot,10,rotor.owner);
+ for(const debris of [...room.debris])if(now-debris.at>5500){room.world.removeRigidBody(debris.body);room.debris.splice(room.debris.indexOf(debris),1);}
+ if(room.phase==='battle')for(const rotor of room.parts.values())if(rotor.kind==='rotor'&&now>rotor.next){
+  rotor.next=now+650;for(const p of allFighters(room))if(p.alive&&D(p.pos,rotor.pos)<2.5)deal(room,p,10,rotor.owner);
  }
  for(const p of room.players.values()){
-  p.energy=Math.min(150,p.energy+dt*2.5);
-  if(p.reloadAt&&now>=p.reloadAt){
-   p.reloadAt=0;p.ammo=p.gun.mag;
-   send(p.ws,{t:'ammo',ammo:p.ammo,mag:p.gun.mag,reload:false});
-  }
+  p.energy=Math.min(150,p.energy+dt*(room.phase==='prep'?5:3.7));
+  if(p.reloadAt&&now>=p.reloadAt){p.reloadAt=0;p.ammo=p.gun.mag;send(p.ws,{t:'ammo',ammo:p.ammo,mag:p.gun.mag,reload:false});}
   if(!p.alive&&now>=p.respawnAt){
-   p.hp=100;p.alive=true;p.pos=spawn(Math.floor(Math.random()*4));p.shield=now+1800;p.ammo=p.gun.mag;p.reloadAt=0;p.grab=null;
+   const lane=Math.floor(Math.random()*2);
+   p.hp=100;p.alive=true;p.pos=room.mode==='boss'?{...p.home}:spawn(p.team,lane);
+   p.shield=now+2200;p.ammo=p.gun.mag;p.reloadAt=0;p.grab=null;
    send(p.ws,{t:'respawn',pos:p.pos});cast(room,{t:'event',message:p.name+' RESPAWN'});
   }
   if(p.alive&&p.pos.y<-2)deal(room,p,100,'WORLD');
@@ -492,26 +490,40 @@ function tickRoom(room,dt,now){
    const part=room.parts.get(p.grab);
    if(!part?.body?.isDynamic()||D(part.pos,p.pos)>12){p.grab=null;send(p.ws,{t:'grabbing',id:null});continue;}
    const desired=V(p.pos.x+p.shotDir.x*3.8,p.pos.y+p.shotDir.y*3.8,p.pos.z+p.shotDir.z*3.8);
-   const vel=part.body.linvel();const delta=V(desired.x-part.pos.x,desired.y-part.pos.y,desired.z-part.pos.z);
-   part.body.applyImpulse(V(clamp((delta.x*12-vel.x*3),-25,25),clamp((delta.y*12-vel.y*3),-25,25),clamp((delta.z*12-vel.z*3),-25,25)),true);
+   const vel=part.body.linvel(),delta=V(desired.x-part.pos.x,desired.y-part.pos.y,desired.z-part.pos.z);
+   part.body.applyImpulse(V(clamp(delta.x*12-vel.x*3,-25,25),clamp(delta.y*12-vel.y*3,-25,25),clamp(delta.z*12-vel.z*3,-25,25)),true);
+  }
+  if(room.phase==='battle'&&now-p.lastRestock>=18000){
+   p.lastRestock=now;
+   const kinds=Object.keys(p.loadout).filter(kind=>p.loadout[kind]>0&&p.inv[kind]<p.loadout[kind]);
+   if(kinds.length){
+    const kind=kinds[Math.floor(Math.random()*kinds.length)];
+    p.inv[kind]++;send(p.ws,{t:'inventory',inv:p.inv});
+    send(p.ws,{t:'event',message:'スクラップ回収 +1 '+PARTS[kind].name});
+   }
   }
  }
- if(room.bot)updateBot(room,dt,now);
+ if(room.phase!=='battle')return;
+ for(const bot of room.bots)updateBot(room,bot,dt,now);
  if(room.boss)updateBoss(room,dt,now);
- updateRelays(room,dt,now);
- updateTurrets(room,now);
- if(now-room.started>GAME_MS-40000&&now-room.started<GAME_MS-39000&&room.tick%20===0)cast(room,{t:'event',message:'FINAL 40 SECONDS · リレー獲得点が2倍'});
+ updateRelays(room,dt,now);updateTurrets(room,now);
+ if(room.rule==='skirmish')for(const team of ['A','B'])if(room.teamScores[team]>=16){finish(room,'TEAM '+team+' が撃破数で勝利',team);return;}
  const boundary=now-room.started>GAME_MS-40000?34:ARENA_LIMIT;
- if(boundary<ARENA_LIMIT)for(const p of room.players.values())if(p.alive&&(Math.abs(p.pos.x)>boundary||Math.abs(p.pos.z)>boundary))deal(room,p,dt*5,'ZONE');
+ if(boundary<ARENA_LIMIT)for(const p of allFighters(room))if(p.alive&&(Math.abs(p.pos.x)>boundary||Math.abs(p.pos.z)>boundary))deal(room,p,dt*5,'ZONE');
 }
+
 function snapshot(room,now){
- return {t:'state',mode:room.mode,id:room.id,remaining:Math.max(0,Math.ceil((GAME_MS-(now-room.started))/1000)),players:[...room.players.values()].map(p=>({id:p.id,name:p.name,pos:p.pos,hp:Math.round(p.hp),alive:p.alive,kills:p.kills,deaths:p.deaths,score:p.score,energy:Math.floor(p.energy),shield:p.shield>now})),
- bot:room.bot?{id:room.bot.id,name:room.bot.name,pos:room.bot.pos,hp:Math.round(room.bot.hp),alive:room.bot.alive,kills:room.bot.kills,score:room.bot.score}:null,
- relays:room.mode==='boss'?[]:room.relays.map(r=>({id:r.id,pos:r.pos,owner:r.owner,progress:Math.round(r.progress),claimer:r.claimer})),
+ const view=p=>({id:p.id,name:p.name,team:p.team,pos:p.pos,hp:Math.round(p.hp),alive:p.alive,kills:p.kills,deaths:p.deaths,score:p.score,energy:Math.floor(p.energy),shield:p.shield>now,ready:!!p.ready});
+ return {t:'state',mode:room.mode,rule:room.rule,phase:room.phase,id:room.id,remaining:Math.max(0,Math.ceil((GAME_MS-(now-room.started))/1000)),
+ prepRemaining:room.phase==='prep'?Math.max(0,Math.ceil((room.prepEndsAt-now)/1000)):0,
+ players:[...room.players.values()].map(view),bots:room.bots.map(view),teamScores:room.teamScores,
+ cores:room.rule==='fortress'?room.cores:null,
+ relays:room.rule==='relay'?room.relays.map(r=>({id:r.id,pos:r.pos,owner:r.owner,progress:Math.round(r.progress),claimer:r.claimer})):[],
  boss:room.boss?{pos:room.boss.pos,hp:Math.max(0,Math.round(room.boss.hp)),maxHp:room.boss.maxHp,phase:room.boss.phase,weakspot:room.boss.weakspot}:null,
- parts:[...room.parts.values()].map(p=>({id:p.id,kind:p.kind,owner:p.owner,pos:p.pos,rot:p.rot,angle:p.kind==='rotor'?((now-p.at)*.005):null,hp:Math.round(p.hp)})),
+ parts:[...room.parts.values()].map(p=>({id:p.id,kind:p.kind,owner:p.owner,pos:p.pos,rot:p.rot,angle:p.kind==='rotor'?((now-p.at)*.005):null,hp:Math.round(p.hp),disabled:now<(p.disabledUntil||0)})),
  debris:room.debris.slice(0,50).map(d=>({pos:d.body.translation(),size:d.half}))};
 }
+
 let prev=Date.now();setInterval(()=>{
  const now=Date.now(),dt=clamp((now-prev)/1000,.005,.07);prev=now;
  for(const room of rooms.values()){
@@ -532,24 +544,28 @@ wss.on('connection',(ws,req)=>{
   if(m.t==='join'&&!player){
    const invite=String(m.room||'').toUpperCase().trim();
    const mode=['pvp','solo','boss'].includes(m.mode)?m.mode:'solo';
-   room=invite?rooms.get(invite):makeRoom(mode);
+   room=invite?rooms.get(invite):makeRoom(mode,m.rule);
    if(!room)return send(ws,{t:'error',message:'ルームを作成できません。時間をおいてください'});
    if(room.players.size>=PLAYER_MAX||room.mode==='solo'&&room.players.size>0||room.state==='ended'||(invite&&room.state==='running'&&room.mode!=='boss')||(invite&&room.state==='running'&&Date.now()-room.started>60000))return send(ws,{t:'error',message:'満員または参加できないルームです'});
    player=newPlayer(room,ws,m.name,m.gun,m.plan);
-   if(room.mode==='solo'){room.bot=makeBot();room.started=Date.now();}
-   if(room.mode==='boss'&&!room.started){room.started=Date.now();}
+   if(room.mode!=='pvp'&&!room.started)startMatch(room);
    if(room.mode==='boss'&&room.players.size>1){room.boss.maxHp+=1800;room.boss.hp+=1800;}
    room.last=Date.now();
-   send(ws,{t:'welcome',id:room.id,mode:room.mode,playerId:player.id,pos:player.pos,ammo:player.ammo,gun:player.gun,inv:player.inv});
+   send(ws,{t:'welcome',id:room.id,mode:room.mode,rule:room.rule,team:player.team,playerId:player.id,pos:player.pos,ammo:player.ammo,gun:player.gun,inv:player.inv});
    if(room.state==='lobby')lobbyState(room);
-   else{send(ws,{t:'begin',id:room.id,duration:GAME_MS,mode:room.mode});send(ws,snapshot(room,Date.now()));}
+   else{send(ws,{t:'begin',id:room.id,duration:GAME_MS,mode:room.mode,rule:room.rule,phase:room.phase,prepSeconds:Math.ceil(room.prepTime/1000)});send(ws,snapshot(room,Date.now()));}
    cast(room,{t:'event',message:player.name+' JOINED'});
    return;
   }
   if(!player||!room)return;
-  if(m.t==='start'&&room.state==='lobby'&&room.host===player.id){begin(room,true);return;}
+  if(m.t==='start'&&room.state==='lobby'&&room.host===player.id){begin(room);return;}
   if(room.state!=='running')return;
-  if(m.t==='clientdiag'){
+  if(m.t==='ready'&&room.phase==='prep'&&!player.ready){
+    player.ready=true;cast(room,{t:'event',message:player.name+' が建築準備完了'});
+    if([...room.players.values()].every(p=>p.ready))startBattle(room);
+    return;
+   }
+   if(m.t==='clientdiag'){
    const calls=Number(m.drawCalls),tris=Number(m.triangles);
    if(Number.isFinite(calls)&&Number.isFinite(tris)&&room.tick%8===0){
     console.info('[BILDGAN/CLIENT3D]',JSON.stringify({calls:Math.trunc(calls),triangles:Math.trunc(tris),centerInside:!!m.centerInside,uniform:String(m.uniform||'').slice(0,64)}));
@@ -561,6 +577,10 @@ wss.on('connection',(ws,req)=>{
    player.movedAt=now;
    const horiz=Math.hypot(m.pos.x-player.pos.x,m.pos.z-player.pos.z);
    if(horiz>15*delta+1.4||Math.abs(m.pos.x)>ARENA_LIMIT+2||Math.abs(m.pos.z)>ARENA_LIMIT+2||m.pos.y>22||m.pos.y<-4||Math.abs(m.pos.y-player.pos.y)>13*delta+2.5)return;
+   if(room.phase==='prep'&&Math.hypot(m.pos.x-player.home.x,m.pos.z-player.home.z)>16.5)return;
+   if(blockedPlayerPosition(m.pos))return;
+   if(room.rule==='fortress'&&Object.values(room.cores).some(c=>Math.hypot(m.pos.x-c.pos.x,m.pos.z-c.pos.z)<2.45))return;
+   if([...room.parts.values()].some(part=>Math.abs(m.pos.y-part.pos.y)<2.1&&Math.abs(m.pos.x-part.pos.x)<1.18&&Math.abs(m.pos.z-part.pos.z)<1.18))return;
    player.pos=V(m.pos.x,m.pos.y,m.pos.z);
   }
   if(m.t==='look'&&validPosition(m.dir))player.shotDir=N(m.dir);
