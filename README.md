@@ -37,3 +37,43 @@ GitHub -> Render **Web Service**, runtime Node, Singapore region. Build `npm ins
 5. Offer low-effects controls to keep lower-end devices playable.
 
 Repository name BILDGAN is kept by design.
+
+## Windows local hosting with Tailscale Funnel
+
+This project runs a Node.js HTTP + WebSocket server. To avoid disrupting other games already using Funnel port 443 and 8443, host BILDGAN on local port **8792** and expose it on HTTPS port **10000**.
+
+**One-click setup:** run `start-bildgan.cmd` in the repository directory. The batch file checks Node dependencies, runs checks and tests, builds the client, and runs the server on port 8792. Keep this terminal running while players are connected.
+
+In a **second** PowerShell or Command Prompt window, run:
+
+```powershell
+tailscale funnel --bg --https=10000 http://127.0.0.1:8792
+tailscale funnel status
+```
+
+Check the local app first at `http://127.0.0.1:8792`, then open the public HTTPS URL shown by Tailscale, typically `https://<device>.<tailnet>.ts.net:10000`.
+
+Manual alternative from PowerShell (use `npm.cmd` instead of `npm` when PowerShell script execution is restricted):
+
+```powershell
+git clone https://github.com/NekoNekoKoneKo222/BILDGAN.git
+cd BILDGAN
+npm.cmd install --no-audit --no-fund
+npm.cmd run check
+npm.cmd test
+npm.cmd run build
+$env:PORT=8792
+npm.cmd start
+```
+
+To stop publishing **only BILDGAN** (keep other Funnel mappings intact):
+
+```powershell
+tailscale funnel --https=10000 off
+```
+
+The local game server must remain running, and Windows must remain awake and connected to Tailscale. Funnel is **public to the internet**; do not expose private admin endpoints or personal files. Funnel has bandwidth limits. Check `tailscale funnel status` before changing your existing mappings.
+
+Do **not** run `tailscale funnel reset` or overwrite ports 443/8443 if you need the other games to stay online.
+
+Render deployment remains separately configured unless you explicitly remove or disable it.
