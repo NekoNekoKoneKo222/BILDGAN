@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import {PARTS,GUN_MODULES,DEFAULT_GUN,DEFAULT_PLAN,MAX_BUILD_PIECES,weaponStats,sanitizeGun,sanitizePlan} from '../server/rules.js';
 import './style.css';
 import {readMoveAxes} from '../shared/movement.js';
-import {ARENA_SOLIDS,CORE_LOCATIONS,blockedPlayerPosition} from '../shared/arena.js';
+import {ARENA_SOLIDS,CORE_LOCATIONS} from '../shared/arena.js';
+import {blockedSweep} from '../shared/collision.js';
 
 const $=id=>document.getElementById(id);
 // Daylight arena: prioritize silhouettes, target visibility and readable building pieces.
@@ -189,26 +190,58 @@ $('brightnessSetting').addEventListener('input',e=>setBrightness(e.target.value)
 $('brightnessQuick').addEventListener('input',e=>setBrightness(e.target.value));
 setBrightness(brightness);
 
+// GPU-conscious VFX budget; effects are tied to server-confirmed impacts.
+const effectsOptions=['low','medium','high'];
+let effectsQuality=localStorage.getItem(STORAGE+'effects')||(touchEnabled?'low':'medium');
+if(!effectsOptions.includes(effectsQuality))effectsQuality='medium';
+$('effectsSetting').value=effectsQuality;
+$('effectsSetting').addEventListener('change',e=>{
+ effectsQuality=effectsOptions.includes(e.target.value)?e.target.value:'medium';
+ localStorage.setItem(STORAGE+'effects',effectsQuality);toast('エフェクト品質: '+effectsQuality);
+});
+const fxCount=()=>effectsQuality==='low'?3:effectsQuality==='medium'?7:12;
+const fxLimit=()=>effectsQuality==='low'?35:effectsQuality==='medium'?75:140;
 const particles=[],effectGroup=new THREE.Group();scene.add(effectGroup);
-function addEffect(mesh,duration=450,expand=0){effectGroup.add(mesh);particles.push({mesh,start:performance.now(),duration,expand});}
+function removeEffect(p){effectGroup.remove(p.mesh);p.mesh.geometry.dispose();p.mesh.material.dispose();}
+function addEffect(mesh,duration=450,expand=0,velocity=null){
+ while(particles.length>=fxLimit())removeEffect(particles.shift());
+ effectGroup.add(mesh);particles.push({mesh,start:performance.now(),duration,expand,velocity});
+}
 function flashLine(a,b,color=palette.cyan){
  const A=new THREE.Vector3(a.x,a.y,a.z),B=new THREE.Vector3(b.x,b.y,b.z);
  const delta=new THREE.Vector3().subVectors(B,A),len=delta.length();
  if(len<.1)return;
- const mesh=new THREE.Mesh(new THREE.CylinderGeometry(.026,.037,len,5),new THREE.MeshBasicMaterial({color,transparent:true,opacity:.95}));
+ const mesh=new THREE.Mesh(new THREE.CylinderGeometry(.04,.065,len,5),new THREE.MeshBasicMaterial({color,transparent:true,opacity:.94,depthWrite:false}));
  mesh.position.copy(A.add(B).multiplyScalar(.5));mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),delta.normalize());
  addEffect(mesh,150);
 }
 function shockRing(pos,radius,color,ms=1200){
- const mesh=new THREE.Mesh(new THREE.RingGeometry(Math.max(.2,radius-.22),radius,48),new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide,transparent:true,opacity:.8,depthWrite:false}));
+ const mesh=new THREE.Mesh(new THREE.RingGeometry(Math.max(.2,radius-.22),radius,effectsQuality==='low'?24:48),new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide,transparent:true,opacity:.8,depthWrite:false}));
  mesh.rotation.x=-Math.PI/2;mesh.position.set(pos.x,.09,pos.z);addEffect(mesh,ms,.01);
 }
 function burst(pos,color){
- for(let i=0;i<7;i++){
-  const b=new THREE.Mesh(new THREE.IcosahedronGeometry(.13,0),new THREE.MeshBasicMaterial({color,transparent:true,opacity:1}));
-  b.position.set(pos.x+Math.random()*.8-.4,pos.y+Math.random()*.9,pos.z+Math.random()*.8-.4);
-  addEffect(b,350,1.8);
+ for(let i=0;i<fxCount();i++){
+  const b=new THREE.Mesh(new THREE.IcosahedronGeometry(.08+Math.random()*.07,0),new THREE.MeshBasicMaterial({color,transparent:true,opacity:1,depthWrite:false}));
+  b.position.set(pos.x+Math.random()*.35-.18,pos.y+Math.random()*.4,pos.z+Math.random()*.35-.18);
+  const velocity=new THREE.Vector3((Math.random()-.5)*5,2.5+Math.random()*4,(Math.random()-.5)*5);
+  addEffect(b,400+Math.random()*300,0,velocity);
  }
+}
+function impactFlare(pos,color,radius=.7){
+ const mesh=new THREE.Mesh(new THREE.IcosahedronGeometry(radius,effectsQuality==='low'?0:1),
+  new THREE.MeshBasicMaterial({color,transparent:true,opacity:.78,depthWrite:false,depthTest:true}));
+ mesh.position.set(pos.x,pos.y,pos.z);addEffect(mesh,180,1.7);
+}
+function buildPulse(pos){
+ impactFlare(pos,0x6fffe2,.38);shockRing(pos,1.25,0x36dcc5,520);
+ if(effectsQuality!=='low')burst(pos,0x7bf7da);
+}
+function impactEffect(pos,type){
+ if(!pos||type==='none')return;
+ const color=type==='terrain'?0xffdda6:type==='part'?0xffd57e:type==='core'?0xf7a9ff:type==='boss'?0xff876a:0x74ffff;
+ impactFlare(pos,color,type==='core'?.7:.25);
+ if(type==='part'||type==='core'||type==='boss')burst(pos,color);
+ if(type==='terrain'&&effectsQuality==='high')burst(pos,color);
 }
 function playTone(freq,duration=.08,type='triangle',gain=.055){
  try{
