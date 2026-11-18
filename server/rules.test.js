@@ -22,3 +22,9 @@ test('nickname and coordinates are sanitized',()=>{
  assert.ok(!validPosition({x:Infinity,y:0,z:0}));
  assert.ok(validPosition({x:1,y:2,z:3}));
 });
+
+test('specialized gun cores keep balanced stats and recognizable traits',()=>{
+ for(const core of ['plasma','pulse','scatter','breaker']){
+  const w=weaponStats({core});assert.equal(w.gun.core,core);assert.equal(typeof w.trait,'string');assert.ok(w.damage>=7&&w.rpm>=168);
+ }
+});

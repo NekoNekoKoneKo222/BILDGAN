@@ -5,7 +5,8 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {WebSocket,WebSocketServer} from 'ws';
 import RAPIER from '@dimforge/rapier3d-compat';
-import {GAME_MS,ARENA_LIMIT,PARTS,DEFAULT_PLAN,sanitizeGun,weaponStats,sanitizePlan,cleanName,clamp,validPosition} from './rules.js';
+import {GAME_MS,ARENA_LIMIT,PREP_MS,BOSS_PREP_MS,TEAM_SCORE_TO_WIN,CORE_MAX_HP,GAME_RULES,PARTS,sanitizeGun,weaponStats,sanitizePlan,cleanName,clamp,validPosition} from './rules.js';
+import {ARENA_SOLIDS,CORE_LOCATIONS,blockedPlayerPosition,rayBoxDistance,nearestArenaHit} from '../shared/arena.js';
 
 await RAPIER.init();
 const app=express();
@@ -27,84 +28,145 @@ const rnd=(min,max)=>min+Math.random()*(max-min);
 const send=(ws,obj)=>{if(ws?.readyState===WebSocket.OPEN){try{ws.send(JSON.stringify(obj))}catch{}}};
 const cast=(room,obj)=>{for(const p of room.players.values())send(p.ws,obj)};
 // Place combatants near the objective lanes instead of pointing out into an empty corner.
-const SPAWNS=[V(-27,1.65,-24),V(27,1.65,24),V(-27,1.65,24),V(27,1.65,-24)];
-const spawn=n=>({...SPAWNS[n%SPAWNS.length]});
+const SPAWNS={A:[V(-38,1.65,-11),V(-38,1.65,11)],B:[V(38,1.65,-11),V(38,1.65,11)]};
+const spawn=(team,index=0)=>({...SPAWNS[team][index%2]});
+const teamOpposite=team=>team==='A'?'B':'A';
+const pickRule=r=>GAME_RULES.includes(r)?r:'fortress';
+const scoreTeam=(room,team,points)=>{if(team==='A'||team==='B')room.teamScores[team]+=points;};
+const allFighters=room=>[...room.players.values(),...room.bots];
+const fighterFor=(room,id)=>room.players.get(id)||room.bots.find(x=>x.id===id);
+const resolveTeam=(room,id)=>fighterFor(room,id)?.team||'';
+function fillBots(room){
+ if(room.mode==='boss')return;
+ for(const team of ['A','B']){
+  const humans=[...room.players.values()].filter(p=>p.team===team).length;
+  for(let i=humans;i<2;i++)room.bots.push(makeBot(team,i));
+ }
+}
 const roomCode=()=>crypto.randomBytes(3).toString('hex').toUpperCase();
 const ROOM_MAX=80, PLAYER_MAX=4;
-function makeRoom(mode){
+function makeRoom(mode,selectedRule='fortress'){
  if(rooms.size>=ROOM_MAX)return null;
  let id=roomCode();while(rooms.has(id))id=roomCode();
  const world=new RAPIER.World(V(0,-13,0));world.timestep=1/30;
  world.createCollider(RAPIER.ColliderDesc.cuboid(62,.5,62).setTranslation(0,-.5,0).setFriction(.9));
- const room={id,mode,world,players:new Map(),parts:new Map(),debris:[],relays:[{id:'A',pos:V(-24,0,0),owner:'',progress:0,claimer:'',nextScore:0},{id:'B',pos:V(0,0,0),owner:'',progress:0,claimer:'',nextScore:0},{id:'C',pos:V(24,0,0),owner:'',progress:0,claimer:'',nextScore:0}],bot:null,boss:null,host:'',state:mode==='pvp'?'lobby':'running',created:Date.now(),started:0,last:Date.now(),events:[],result:null,lastSnapshot:0,tick:0};
- if(mode==='boss')room.boss={pos:V(0,3.2,0),hp:4700,maxHp:4700,phase:1,nextAttack:Date.now()+4500,attack:null,weakspot:0,lastSummon:0};
- rooms.set(id,room);
- return room;
+ for(const s of ARENA_SOLIDS){
+  world.createCollider(RAPIER.ColliderDesc.cuboid(s.half.x,s.half.y,s.half.z).setTranslation(s.pos.x,s.pos.y,s.pos.z));
+ }
+ const rule=mode==='boss'?'boss':pickRule(selectedRule);
+ const prepTime=rule==='skirmish'?0:rule==='boss'?BOSS_PREP_MS:PREP_MS;
+ const room={id,mode,rule,prepTime,phase:prepTime?'prep':'battle',prepEndsAt:0,world,players:new Map(),bots:[],parts:new Map(),debris:[],
+ relays:[{id:'A',pos:V(-24,0,0),owner:'',progress:0,claimer:'',nextScore:0},{id:'B',pos:V(0,0,0),owner:'',progress:0,claimer:'',nextScore:0},{id:'C',pos:V(24,0,0),owner:'',progress:0,claimer:'',nextScore:0}],
+ cores:{A:{id:'A',pos:{...CORE_LOCATIONS.A},hp:CORE_MAX_HP,maxHp:CORE_MAX_HP},B:{id:'B',pos:{...CORE_LOCATIONS.B},hp:CORE_MAX_HP,maxHp:CORE_MAX_HP}},
+ teamScores:{A:0,B:0},boss:null,host:'',state:mode==='pvp'?'lobby':'running',created:Date.now(),started:0,last:Date.now(),result:null,lastSnapshot:0,tick:0};
+ if(mode==='boss')room.boss={pos:V(0,3.2,0),hp:4700,maxHp:4700,phase:1,nextAttack:Date.now()+7000,attack:null,weakspot:0,lastSummon:0};
+ rooms.set(id,room);return room;
 }
+
 function newPlayer(room,ws,name,gun,plan){
- const p={id:crypto.randomUUID(),ws,name:cleanName(name),pos:spawn(room.players.size),hp:100,alive:true,kills:0,deaths:0,score:0,energy:150,ammo:0,reloadAt:0,shotAt:0,movedAt:Date.now(),shotDir:V(0,0,-1),lastPlace:0,lastGrab:0,inv:sanitizePlan(plan),gun:weaponStats(gun),respawnAt:0,shield:Date.now()+2200,grab:null,lastInteract:0,damage:0};
- p.ammo=p.gun.mag;
- room.players.set(p.id,p);
+ const humanCount=[...room.players.values()].length;
+ const team=room.mode==='boss'?'A':humanCount%2===0?'A':'B';
+ const index=[...room.players.values()].filter(p=>p.team===team).length;
+ const home=room.mode==='boss'?V(index%2===0?-38:38,1.65,index<2?-11:11):spawn(team,index);
+ const p={id:crypto.randomUUID(),ws,name:cleanName(name),team,pos:{...home},home:{...home},
+ hp:100,alive:true,kills:0,deaths:0,score:0,energy:150,ammo:0,reloadAt:0,shotAt:0,
+ movedAt:Date.now(),shotDir:V(0,0,-1),lastPlace:0,lastGrab:0,ready:false,
+ inv:sanitizePlan(plan),loadout:sanitizePlan(plan),gun:weaponStats(gun),
+ respawnAt:0,shield:Date.now()+1800,grab:null,lastInteract:0,lastRestock:Date.now(),damage:0};
+ p.ammo=p.gun.mag;room.players.set(p.id,p);
  if(!room.host)room.host=p.id;
  return p;
 }
-function makeBot(){
- return {id:'BOT',name:'SCRAP BOT',pos:V(22,1.65,20),hp:100,alive:true,kills:0,deaths:0,score:0,energy:0,shotAt:0,respawnAt:0,shield:Date.now()+1500,dir:1,side:1};
+
+function makeBot(team,index){
+ const pos=spawn(team,index);
+ return {id:'BOT_'+team+'_'+index,name:team==='A'?'ALLY BOT':'RIVAL BOT',team,pos,home:{...pos},hp:100,alive:true,kills:0,deaths:0,score:0,damage:0,
+ energy:0,shotAt:Date.now()+5000,respawnAt:0,shield:Date.now()+2000,side:index%2?1:-1,stuck:0};
 }
+
 function lobbyState(room){
- cast(room,{t:'lobby',id:room.id,host:room.host,players:[...room.players.values()].map(p=>({id:p.id,name:p.name})),maxPlayers:PLAYER_MAX});
+ cast(room,{t:'lobby',id:room.id,host:room.host,rule:room.rule,players:[...room.players.values()].map(p=>({id:p.id,name:p.name,team:p.team})),maxPlayers:PLAYER_MAX});
 }
-function begin(room,botFill=false){
+
+
+function startMatch(room){
+ room.started=Date.now();room.prepEndsAt=room.started+room.prepTime;
+ if(room.prepTime>0){
+  room.phase='prep';
+  for(const p of room.players.values())p.ready=false;
+ }else room.phase='battle';
+ fillBots(room);
+ cast(room,{t:'begin',id:room.id,duration:GAME_MS,mode:room.mode,rule:room.rule,phase:room.phase,prepSeconds:Math.ceil(room.prepTime/1000)});
+ if(room.phase==='prep')cast(room,{t:'event',message:'各自の建築エリアで準備！ 砲撃と拠点占領は準備後に開始'});
+ else cast(room,{t:'event',message:'戦闘開始！ チームで勝利を目指せ'});
+}
+function startBattle(room){
+ if(room.phase==='battle'||room.state!=='running')return;
+ room.phase='battle';
+ for(const p of room.players.values())p.shield=Date.now()+1600;
+ for(const bot of room.bots)bot.shotAt=Date.now()+2300;
+ cast(room,{t:'phase',phase:'battle',rule:room.rule});
+ cast(room,{t:'event',message:room.rule==='fortress'?'敵のコアを破壊し、自分のコアを守れ！':room.rule==='relay'?'リレーを確保！ 敵チームより先に24点！':'戦闘開始！'});
+}
+function begin(room){
  if(room.state!=='lobby')return;
- room.state='running';room.started=Date.now();
- if(botFill&&room.players.size<2)room.bot=makeBot();
- cast(room,{t:'begin',id:room.id,duration:GAME_MS,mode:room.mode});
- cast(room,{t:'event',message:'対戦開始！ 3つのリレーを確保して12点を目指せ'});
+ room.state='running';startMatch(room);
 }
+
 function finish(room,message,winner=''){
  if(room.state==='ended')return;
  room.state='ended';room.last=Date.now();
- const players=[...room.players.values()];
- const scoreboard=[...players,...(room.bot?[room.bot]:[])].map(p=>({id:p.id,name:p.name,kills:p.kills,deaths:p.deaths,score:p.score,damage:Math.round(p.damage||0)})).sort((a,b)=>b.score-a.score||b.kills-a.kills);
- room.result={t:'ended',message,winner,scores:scoreboard};
+ const all=allFighters(room);
+ const scores=all.map(p=>({id:p.id,name:p.name,team:p.team,kills:p.kills,deaths:p.deaths,score:p.score,damage:Math.round(p.damage||0)})).sort((a,b)=>b.score-a.score||b.kills-a.kills);
+ room.result={t:'ended',message,winner,winnerTeam:winner==='A'||winner==='B'?winner:'',scores,teamScores:room.teamScores};
  cast(room,room.result);
 }
+
 function deal(room,p,amount,from){
- if(!p||!p.alive||room.state!=='running'||Date.now()<p.shield)return false;
+ if(!p||!p.alive||room.state!=='running'||room.phase!=='battle'||Date.now()<p.shield)return false;
+ const killer=fighterFor(room,from);
+ if(killer&&p.team&&killer.team===p.team)return false;
  p.hp=clamp(p.hp-Math.max(0,amount),0,100);
  if(p.hp>0)return true;
- p.alive=false;p.deaths++;p.respawnAt=Date.now()+3200;
- const killer=from==='BOT'?room.bot:room.players.get(from);
- if(killer&&killer.id!==p.id&&room.mode!=='boss'){killer.kills++;killer.score+=2;cast(room,{t:'event',message:killer.name+' 撃破 +2'});}
- cast(room,{t:'event',message:p.name+' DOWN · 3秒後に復帰'});
+ p.alive=false;p.deaths++;p.respawnAt=Date.now()+3500;
+ if(killer&&killer.id!==p.id&&room.mode!=='boss'){
+  killer.kills++;killer.score+=2;scoreTeam(room,killer.team,room.rule==='skirmish'?2:1);
+  cast(room,{t:'event',message:killer.name+' 撃破！'});
+ }
+ cast(room,{t:'event',message:p.name+' DOWN · 3.5秒後に復帰'});
  return true;
 }
+
 function finishHit(room,shooter,target,damage,kind){
+ if(kind==='terrain')return false;
  if(kind==='part'){
-  const part=target;
-  if(part.owner===shooter.id&&room.mode!=='boss')return false;
-  part.hp-=damage*1.5;
-  if(part.body?.isDynamic())part.body.applyImpulse(V(rnd(-2,2),Math.max(1,damage*.25),rnd(-2,2)),true);
-  if(part.hp<=0)destroyPart(room,part);
+  if(target.owner===shooter.id&&room.mode!=='boss')return false;
+  const factor=shooter.gun?.gun?.core==='breaker'?2.8:1.2;
+  target.hp-=damage*factor;
+  if(shooter.gun?.gun?.core==='pulse')target.disabledUntil=Date.now()+3000;
+  if(target.body?.isDynamic())target.body.applyImpulse(V(rnd(-2,2),Math.max(1,damage*.32),rnd(-2,2)),true);
+  if(target.hp<=0)destroyPart(room,target);
+  return true;
+ }
+ if(kind==='core'){
+  const dmg=damage*(shooter.gun?.gun?.core==='breaker'?2.2:1);
+  target.hp=Math.max(0,target.hp-dmg);shooter.damage=(shooter.damage||0)+dmg;
+  if(target.hp<=0)finish(room,(target.id==='A'?'チームB':'チームA')+'の勝利 · 敵コア破壊',teamOpposite(target.id));
   return true;
  }
  if(kind==='boss'){
   room.boss.hp=Math.max(0,room.boss.hp-damage);
-  shooter.damage+=damage;
+  shooter.damage=(shooter.damage||0)+damage;
   return true;
  }
- if(kind==='bot'){
-  const ok=deal(room,room.bot,damage,shooter.id);
-  if(ok)shooter.damage+=damage;
-  return ok;
- }
- if(kind==='player'){
+ if(kind==='bot'||kind==='player'){
   const ok=deal(room,target,damage,shooter.id);
-  if(ok)shooter.damage+=damage;
+  if(ok)shooter.damage=(shooter.damage||0)+damage;
   return ok;
  }
  return false;
 }
+
 function physicsDebris(room,part){
  for(let n=0;n<2&&room.debris.length<55;n++){
   const half=rnd(.16,.29),pos=V(part.pos.x+rnd(-.3,.3),part.pos.y+rnd(.1,.6),part.pos.z+rnd(-.3,.3));
@@ -124,8 +186,7 @@ function destroyPart(room,part){
 }
 function explode(room,pos,radius,amount,source){
  cast(room,{t:'explosion',pos,radius});
- for(const p of room.players.values())if(D(p.pos,pos)<radius)deal(room,p,amount*(1-D(p.pos,pos)/radius),source);
- if(room.bot&&D(room.bot.pos,pos)<radius)deal(room,room.bot,amount*(1-D(room.bot.pos,pos)/radius),source);
+ for(const fighter of allFighters(room))if(D(fighter.pos,pos)<radius)deal(room,fighter,amount*(1-D(fighter.pos,pos)/radius),source);
  if(room.boss&&D(room.boss.pos,pos)<radius)room.boss.hp-=amount*.28;
  for(const part of [...room.parts.values()]){
   if(D(part.pos,pos)>radius)continue;
@@ -137,68 +198,99 @@ function explode(room,pos,radius,amount,source){
   if(part.hp<=0)destroyPart(room,part);
  }
 }
+
 function addPart(room,owner,kind,pos,rotation){
  const spec=PARTS[kind];if(!spec||room.parts.size>=90)return null;
  const desc=kind==='piston'?RAPIER.RigidBodyDesc.kinematicPositionBased():spec.dynamic?RAPIER.RigidBodyDesc.dynamic():RAPIER.RigidBodyDesc.fixed();
  const body=room.world.createRigidBody(desc.setTranslation(pos.x,pos.y,pos.z).setCanSleep(true));
  const collider=RAPIER.ColliderDesc.cuboid(.88,.88,.88).setRestitution(kind==='spring'?.82:.1).setFriction(.8);
  room.world.createCollider(collider,body);
- const p={id:crypto.randomUUID(),kind,owner:owner?.id||'BOSS',pos:V(pos.x,pos.y,pos.z),basePos:V(pos.x,pos.y,pos.z),rot:Math.trunc(rotation)||0,hp:spec.hp,body,at:Date.now(),next:0};
+ const p={id:crypto.randomUUID(),kind,owner:owner?.id||'BOSS',pos:V(pos.x,pos.y,pos.z),basePos:V(pos.x,pos.y,pos.z),rot:Math.trunc(rotation)||0,hp:spec.hp,body,at:Date.now(),next:0,disabledUntil:0};
  room.parts.set(p.id,p);return p;
 }
 function place(room,player,m){
- if(!player.alive||Date.now()-player.lastPlace<250)return;
+ if(!player.alive||Date.now()-player.lastPlace<230)return;
  player.lastPlace=Date.now();
  const kind=String(m.kind||''),spec=PARTS[kind];
- if(!spec||!validPosition(m.pos)||player.inv[kind]<=0||player.energy<spec.cost)return send(player.ws,{t:'event',message:'パーツ不足またはエネルギー不足'});
+ if(!spec||!validPosition(m.pos)||player.inv[kind]<=0||player.energy<spec.cost)return send(player.ws,{t:'event',message:'パーツまたはエネルギー不足'});
  const pos=V(m.pos.x,m.pos.y,m.pos.z);
- if(Math.abs(pos.x)>ARENA_LIMIT||Math.abs(pos.z)>ARENA_LIMIT||pos.y<.8||pos.y>12||D(pos,player.pos)>11||D(pos,player.pos)<1.3)return;
- if(room.mode!=='boss'&&room.relays.some(x=>D(V(x.pos.x,1,x.pos.z),pos)<3.3))return;
+ if(Math.abs(pos.x)>ARENA_LIMIT||Math.abs(pos.z)>ARENA_LIMIT||pos.y<.8||pos.y>12||D(pos,player.pos)>11.5||D(pos,player.pos)<1.3)return;
+ if(room.phase==='prep'&&Math.hypot(pos.x-player.home.x,pos.z-player.home.z)>16)return send(player.ws,{t:'event',message:'準備中は自分の建築エリア内で設置してください'});
+ if(room.rule==='relay'&&room.relays.some(x=>D(V(x.pos.x,1,x.pos.z),pos)<4))return;
+ if(ARENA_SOLIDS.some(s=>Math.abs(pos.x-s.pos.x)<s.half.x+.95&&Math.abs(pos.z-s.pos.z)<s.half.z+.95&&pos.y-s.pos.y<s.half.y+.85&&pos.y-s.pos.y>-(s.half.y+.85)))return send(player.ws,{t:'event',message:'ポールや固定建造物と重なっています'});
+ if(room.rule==='fortress'&&Object.values(room.cores).some(x=>D(pos,x.pos)<3.25))return send(player.ws,{t:'event',message:'コア本体には建築できません'});
  if([...room.parts.values()].some(x=>D(x.pos,pos)<1.75))return;
  const count=[...room.parts.values()].filter(x=>x.owner===player.id).length;
  if(count>=18)return send(player.ws,{t:'event',message:'個人の設置数上限は18個'});
  const part=addPart(room,player,kind,pos,Number(m.rot)||0);
  if(part){player.energy-=spec.cost;player.inv[kind]--;send(player.ws,{t:'inventory',inv:player.inv});}
 }
-function findHit(room,origin,dir,range,owner){
+
+function findHit(room,origin,dir,range,owner,ignoreId=''){
  let best=range,hit=null;
+ const terrain=nearestArenaHit(origin,dir,range);
+ if(terrain){best=terrain.distance;hit={type:'terrain',ref:terrain.solid,point:V(origin.x+dir.x*best,origin.y+dir.y*best,origin.z+dir.z*best)};}
  function test(pos,rad,type,ref){
   const delta=V(pos.x-origin.x,pos.y-origin.y,pos.z-origin.z);
   const t=delta.x*dir.x+delta.y*dir.y+delta.z*dir.z;
-  if(t<.3||t>best)return;
+  if(t<.2||t>best)return;
   const q=V(origin.x+t*dir.x,origin.y+t*dir.y,origin.z+t*dir.z);
   if(D(q,pos)<=rad){best=t;hit={type,ref,point:q};}
  }
- if(room.mode!=='boss')for(const p of room.players.values())if(p.id!==owner&&p.alive)test(p.pos,.79,'player',p);
- if(room.bot?.alive)test(room.bot.pos,.8,'bot',room.bot);
- if(room.boss&&room.boss.hp>0)test(room.boss.pos,2.6,'boss',room.boss);
- for(const part of room.parts.values())test(part.pos,1.1,'part',part);
+ const team=resolveTeam(room,owner);
+ if(room.mode!=='boss')for(const p of allFighters(room))if(p.id!==owner&&p.alive&&p.team!==team)test(p.pos,.79,p.id.startsWith('BOT_')?'bot':'player',p);
+ if(room.boss?.hp>0)test(room.boss.pos,2.6,'boss',room.boss);
+ for(const part of room.parts.values())if(part.id!==ignoreId)test(part.pos,1.1,'part',part);
+ if(room.rule==='fortress'&&room.mode!=='boss'){
+  for(const core of Object.values(room.cores))if(core.id!==team&&core.hp>0)test(core.pos,2.35,'core',core);
+ }
  return hit;
 }
+
 function shoot(room,player,m){
- const now=Date.now();if(room.state!=='running'||!player.alive||now<player.shotAt||now<player.reloadAt)return;
+ const now=Date.now();if(room.state!=='running'||room.phase!=='battle'||!player.alive||now<player.shotAt||now<player.reloadAt)return;
  if(player.ammo<=0){reload(player);return;}
  if(!validPosition(m.dir))return;
- let dir=N(m.dir);player.shotAt=now+player.gun.ms;player.ammo--;
- const spread=player.gun.spread;
- dir=N(V(dir.x+rnd(-spread,spread),dir.y+rnd(-spread,spread),dir.z+rnd(-spread,spread)));
- const target=findHit(room,player.pos,dir,player.gun.range,player.id);
- const end=target?.point||V(player.pos.x+dir.x*player.gun.range,player.pos.y+dir.y*player.gun.range,player.pos.z+dir.z*player.gun.range);
- let confirmed=false;
- if(target){
-  let dmg=player.gun.damage;
-  if(target.type==='boss'){
-   const boss=room.boss;
-   const weak=V(boss.pos.x+(boss.weakspot===0?-1.1:1.1),boss.pos.y+1.25,boss.pos.z);
-   if(D(end,weak)<1.5)dmg*=1.65;
+ const core=player.gun.gun.core;
+ player.shotAt=now+player.gun.ms;player.ammo--;
+ const origin=player.pos,aim=N(m.dir),pellets=core==='scatter'?5:1;
+ let confirmed=false,lastEnd=null,lastKind='';
+ for(let i=0;i<pellets;i++){
+  const spread=player.gun.spread*(core==='scatter'?1.7:1);
+  const dir=N(V(aim.x+rnd(-spread,spread),aim.y+rnd(-spread,spread),aim.z+rnd(-spread,spread)));
+  const target=findHit(room,origin,dir,player.gun.range,player.id);
+  const end=target?.point||V(origin.x+dir.x*player.gun.range,origin.y+dir.y*player.gun.range,origin.z+dir.z*player.gun.range);
+  if(i===0)lastEnd=end;
+  if(target){
+   let dmg=player.gun.damage*(pellets===5?.47:1);
+   if(target.type==='boss'){
+    const weak=V(room.boss.pos.x+(room.boss.weakspot===0?-1.1:1.1),room.boss.pos.y+1.25,room.boss.pos.z);
+    if(D(end,weak)<1.5)dmg*=1.65;
+   }
+   if(finishHit(room,player,target.ref,dmg,target.type)){confirmed=true;lastKind=target.type;}
+   if(core==='plasma'&&i===0){
+    // Short-radius splash: cover still blocks the primary ray, but close-range positioning matters.
+    const splash=2.4;
+    for(const fighter of allFighters(room))if(fighter.id!==player.id&&fighter.team!==player.team&&D(fighter.pos,end)<splash){
+     deal(room,fighter,4.5*(1-D(fighter.pos,end)/splash),player.id);
+    }
+    for(const part of [...room.parts.values()])if(part.owner!==player.id&&D(part.pos,end)<splash){part.hp-=11;if(part.hp<=0)destroyPart(room,part);}
+    cast(room,{t:'explosion',pos:end,radius:2.4,minor:true});
+   }
+   if(core==='pulse'&&i===0){
+    for(const part of room.parts.values())if(part.owner!==player.id&&D(part.pos,end)<3.6){
+     if(part.kind==='turret')part.disabledUntil=now+3000;
+     if(part.body?.isDynamic()){const impulse=N(V(part.pos.x-end.x,1.2,part.pos.z-end.z));part.body.applyImpulse(V(impulse.x*13,impulse.y*13,impulse.z*13),true);}
+    }
+   }
   }
-  confirmed=finishHit(room,player,target.ref,dmg,target.type);
  }
- cast(room,{t:'shot',from:player.pos,to:end,by:player.id});
- if(confirmed)send(player.ws,{t:'hit',damage:Math.round(player.gun.damage),target:target.type});
+ cast(room,{t:'shot',from:origin,to:lastEnd,by:player.id,core});
+ if(confirmed)send(player.ws,{t:'hit',damage:Math.round(player.gun.damage),target:lastKind});
  send(player.ws,{t:'ammo',ammo:player.ammo,mag:player.gun.mag,reload:false});
  if(player.ammo===0)reload(player);
 }
+
 function reload(p){
  const now=Date.now();
  if(!p.alive||p.ammo===p.gun.mag||now<p.reloadAt)return;
@@ -223,42 +315,79 @@ function interactPhysics(room,p,m){
   send(p.ws,{t:'grabbing',id:null});
  }
 }
-function updateBot(room,dt,now){
- const bot=room.bot;if(!bot)return;
- if(!bot.alive){if(now>=bot.respawnAt){bot.alive=true;bot.hp=100;bot.pos=V(22,1.65,20);bot.shield=now+1400;cast(room,{t:'event',message:'SCRAP BOT 復帰'});}return;}
- const player=[...room.players.values()].filter(x=>x.alive).sort((a,b)=>D(a.pos,bot.pos)-D(b.pos,bot.pos))[0];
- const targetRelay=room.relays.filter(r=>r.owner!=='BOT').sort((a,b)=>D(bot.pos,V(a.pos.x,1.65,a.pos.z))-D(bot.pos,V(b.pos.x,1.65,b.pos.z)))[0];
- const go=player&&D(player.pos,bot.pos)<24?player.pos:(targetRelay?V(targetRelay.pos.x,1.65,targetRelay.pos.z):V(0,1.65,0));
- const dir=N(V(go.x-bot.pos.x,0,go.z-bot.pos.z));
- bot.pos.x=clamp(bot.pos.x+dir.x*dt*5.2+Math.sin(now*.0011)*dt*1.2,-52,52);
- bot.pos.z=clamp(bot.pos.z+dir.z*dt*5.2+Math.cos(now*.0011)*dt*1.2,-52,52);
- if(player&&D(bot.pos,player.pos)<38&&now>bot.shotAt){
-  bot.shotAt=now+rnd(620,1020);
-  const miss=Math.random()<.22;
-  if(!miss){deal(room,player,9,'BOT');}
-  cast(room,{t:'shot',from:bot.pos,to:miss?V(player.pos.x+rnd(-5,5),1.65,player.pos.z+rnd(-5,5)):player.pos,by:'BOT'});
+function updateBot(room,bot,dt,now){
+ if(!bot.alive){
+  if(now>=bot.respawnAt){bot.alive=true;bot.hp=100;bot.pos=spawn(bot.team,Number(bot.id.at(-1))||0);bot.shield=now+1400;}
+  return;
+ }
+ if(room.phase!=='battle')return;
+ const enemies=allFighters(room).filter(x=>x.alive&&x.team!==bot.team);
+ const nearby=enemies.sort((a,b)=>D(a.pos,bot.pos)-D(b.pos,bot.pos));
+ const target=nearby[0];
+ let desired;
+ if(room.rule==='relay'){
+  const r=room.relays.filter(x=>x.owner!==bot.team).sort((a,b)=>D(bot.pos,a.pos)-D(bot.pos,b.pos))[0];
+  desired=r?V(r.pos.x,1.65,r.pos.z):target?.pos;
+ }else if(room.rule==='fortress'){
+  const goal=room.cores[teamOpposite(bot.team)];
+  desired=target&&D(bot.pos,target.pos)<24?target.pos:V(goal.pos.x,1.65,goal.pos.z);
+ }else desired=target?.pos;
+ if(desired){
+  const vec=N(V(desired.x-bot.pos.x,0,desired.z-bot.pos.z));
+  const advance=target&&D(target.pos,bot.pos)<14?0:1;
+  const speed=4.25,delta=dt*speed;
+  let next=V(bot.pos.x+vec.x*delta*advance,1.65,bot.pos.z+vec.z*delta*advance);
+  if(blockedPlayerPosition(next)){
+   const side=bot.side;
+   next=V(bot.pos.x-vec.z*delta*side,1.65,bot.pos.z+vec.x*delta*side);
+   if(blockedPlayerPosition(next))bot.side=-bot.side;
+  }
+  if(!blockedPlayerPosition(next)){
+   bot.pos.x=clamp(next.x,-52,52);bot.pos.z=clamp(next.z,-52,52);
+  }
+ }
+ if(target&&D(bot.pos,target.pos)<32&&now>bot.shotAt){
+  // Lower CPU pressure: 1 shot every 1.3-1.9s, modest damage, limited accuracy.
+  bot.shotAt=now+rnd(1300,1900);
+  const direction=N(V(target.pos.x-bot.pos.x,target.pos.y-bot.pos.y,target.pos.z-bot.pos.z));
+  const hit=findHit(room,bot.pos,direction,34,bot.id);
+  const end=hit?.point||target.pos;
+  cast(room,{t:'shot',from:bot.pos,to:end,by:bot.id});
+  if(Math.random()<.66&&hit){
+   if(hit.type==='player'||hit.type==='bot')finishHit(room,bot,hit.ref,6.5,hit.type);
+   if(hit.type==='part')finishHit(room,bot,hit.ref,5.0,'part');
+   if(hit.type==='core')finishHit(room,bot,hit.ref,3.5,'core');
+  }
  }
 }
+
 function updateRelays(room,dt,now){
- if(room.mode==='boss')return;
- const subjects=[...room.players.values(),...(room.bot?[room.bot]:[])].filter(p=>p.alive);
+ if(room.rule!=='relay'||room.phase!=='battle')return;
+ const fighters=allFighters(room).filter(p=>p.alive);
  for(const relay of room.relays){
-  const nearby=subjects.filter(p=>Math.hypot(p.pos.x-relay.pos.x,p.pos.z-relay.pos.z)<6.0);
-  if(nearby.length===1){
-   const p=nearby[0];
-   if(relay.claimer!==p.id){relay.claimer=p.id;relay.progress=0;}
-   if(relay.owner!==p.id){
+  const nearby=fighters.filter(p=>Math.hypot(p.pos.x-relay.pos.x,p.pos.z-relay.pos.z)<6);
+  const teams=[...new Set(nearby.map(x=>x.team))];
+  if(teams.length===1){
+   const team=teams[0];
+   if(relay.claimer!==team){relay.claimer=team;relay.progress=0;}
+   if(relay.owner!==team){
     relay.progress=clamp(relay.progress+dt*26,0,100);
-    if(relay.progress>=100){relay.owner=p.id;relay.nextScore=now+12000;p.score+=2;cast(room,{t:'event',message:p.name+' がリレー '+relay.id+' を確保 +2'});}
+    if(relay.progress>=100){
+     relay.owner=team;relay.nextScore=now+11000;scoreTeam(room,team,3);
+     cast(room,{t:'event',message:'TEAM '+team+' がリレー '+relay.id+' を確保 +3'});
+    }
    }
   }else{relay.claimer='';relay.progress=Math.max(0,relay.progress-dt*15);}
   if(relay.owner&&relay.nextScore&&now>=relay.nextScore){
-   const owner=room.players.get(relay.owner)||(room.bot?.id===relay.owner?room.bot:null);
-   if(owner){owner.score+=now-(room.started+GAME_MS-40000)>0?2:1;relay.nextScore=now+12500;}
+   scoreTeam(room,relay.owner,now-room.started>GAME_MS-40000?2:1);
+   relay.nextScore=now+12000;
   }
  }
- for(const p of subjects)if(p.score>=12){finish(room,p.name+' の勝利！',p.id);break;}
+ for(const team of ['A','B'])if(room.teamScores[team]>=TEAM_SCORE_TO_WIN){
+  finish(room,'TEAM '+team+' が占領勝利！',team);break;
+ }
 }
+
 function updateBoss(room,dt,now){
  const boss=room.boss;if(!boss||room.state!=='running')return;
  if(boss.hp<=0){finish(room,'CORE BREAKER 撃破！','TEAM');return;}
@@ -296,23 +425,23 @@ function updateBoss(room,dt,now){
  }
 }
 function updateTurrets(room,now){
+ if(room.phase!=='battle')return;
  for(const part of room.parts.values()){
-  if(part.kind!=='turret'||now<part.next)continue;
-  let candidate=null,best=32;
-  if(part.owner==='BOSS'){
-   for(const p of room.players.values())if(p.alive&&D(p.pos,part.pos)<best){candidate=p;best=D(p.pos,part.pos);}
-  }else if(room.mode==='boss'){if(room.boss?.hp>0&&D(room.boss.pos,part.pos)<best){candidate=room.boss;best=D(room.boss.pos,part.pos);}}
-  else{
-   for(const p of room.players.values())if(p.alive&&p.id!==part.owner&&D(p.pos,part.pos)<best){candidate=p;best=D(p.pos,part.pos);}
-   if(room.bot?.alive&&D(room.bot.pos,part.pos)<best){candidate=room.bot;best=D(room.bot.pos,part.pos);}
-  }
-  if(!candidate)continue;
-  part.next=now+1700;
-  if(candidate===room.boss)room.boss.hp=Math.max(0,room.boss.hp-5);
-  else deal(room,candidate,5,part.owner);
-  cast(room,{t:'shot',from:part.pos,to:candidate.pos,by:part.id});
+  if(part.kind!=='turret'||now<part.next||now<(part.disabledUntil||0))continue;
+  const team=resolveTeam(room,part.owner);
+  const targets=room.mode==='boss'&&part.owner!=='BOSS'?room.boss?[room.boss]:[]:allFighters(room).filter(p=>p.alive&&(part.owner==='BOSS'||p.team!==team));
+  const candidates=targets.filter(p=>D(p.pos,part.pos)<30).sort((a,b)=>D(a.pos,part.pos)-D(b.pos,part.pos));
+  const target=candidates[0];if(!target)continue;
+  const dir=N(V(target.pos.x-part.pos.x,target.pos.y-part.pos.y,target.pos.z-part.pos.z));
+  const hit=findHit(room,part.pos,dir,30,part.owner,part.id);
+  if(hit?.ref!==target)continue;
+  part.next=now+1600;
+  if(target===room.boss)room.boss.hp=Math.max(0,room.boss.hp-8);
+  else deal(room,target,5,part.owner);
+  cast(room,{t:'shot',from:part.pos,to:target.pos,by:part.id});
  }
 }
+
 function tickRoom(room,dt,now){
  if(room.state==='lobby')return;
  if(room.state==='ended')return;

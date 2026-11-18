@@ -1,5 +1,10 @@
 export const GAME_MS = 285000;
 export const ARENA_LIMIT = 55;
+export const PREP_MS=50000;
+export const BOSS_PREP_MS=30000;
+export const TEAM_SCORE_TO_WIN=24;
+export const CORE_MAX_HP=750;
+export const GAME_RULES=Object.freeze(['fortress','relay','skirmish']);
 export const PARTS = Object.freeze({
   steel:{name:'装甲',cost:18,hp:165,dynamic:false},
   ramp:{name:'斜面',cost:16,hp:105,dynamic:false},
@@ -13,7 +18,7 @@ export const PARTS = Object.freeze({
 export const GUN_MODULES = Object.freeze({
  frame:{balanced:{name:'スタンダード',damage:0,rate:0,recoil:0,spread:0,mag:0},light:{name:'ライト',damage:-2,rate:1.5,recoil:-0.4,spread:0.01,mag:0},heavy:{name:'ヘビー',damage:4,rate:-1.2,recoil:1.1,spread:-0.002,mag:0}},
  barrel:{standard:{name:'カービン',damage:0,rate:0,spread:0,range:0},long:{name:'ロング',damage:3,rate:-1,spread:-0.006,range:15},short:{name:'ショート',damage:-3,rate:2,spread:0.015,range:-15}},
- core:{kinetic:{name:'キネティック',damage:0,rate:0},plasma:{name:'プラズマ',damage:2,rate:-1},pulse:{name:'パルス',damage:-2,rate:2}},
+ core:{kinetic:{name:'キネティック',damage:0,rate:0},plasma:{name:'プラズマ・爆風',damage:1,rate:-1.1},pulse:{name:'EMPパルス',damage:-2,rate:.4},scatter:{name:'ショットガン',damage:-1,rate:-2,spread:.035,range:-31},breaker:{name:'構造破壊弾',damage:-1,rate:-1.3,spread:.005}},
  mag:{balanced:{name:'20ラウンド',mag:20,reload:1.7},drum:{name:'ドラム30',mag:30,reload:2.25},quick:{name:'クイック12',mag:12,reload:1.15}},
  optic:{iron:{name:'アイアン',spread:0,recoil:0},stabilizer:{name:'安定化',spread:-0.009,recoil:-0.6},target:{name:'マークスマン',spread:-0.013,recoil:0.55}}
 });
@@ -36,7 +41,7 @@ export function weaponStats(raw){
     damage+=(mod.damage||0);rate+=(mod.rate||0);
     spread+=(mod.spread||0);recoil+=(mod.recoil||0);range+=(mod.range||0);
   }
-  return {gun,damage:clamp(damage,7,29),rpm:Math.round(clamp(rate,2.8,11)*60),ms:Math.round(1000/clamp(rate,2.8,11)),spread:clamp(spread,.006,.085),recoil:clamp(recoil,.25,3.2),range:clamp(range,28,90),mag:GUN_MODULES.mag[gun.mag].mag,reload:GUN_MODULES.mag[gun.mag].reload}
+  return {gun,trait:{kinetic:'基本弾',plasma:'命中位置に小範囲ダメージ',pulse:'敵砲台を3秒停止',scatter:'5発の拡散弾',breaker:'装置へのダメージ2.8倍'}[gun.core],damage:clamp(damage,7,29),rpm:Math.round(clamp(rate,2.8,11)*60),ms:Math.round(1000/clamp(rate,2.8,11)),spread:clamp(spread,.006,.085),recoil:clamp(recoil,.25,3.2),range:clamp(range,28,90),mag:GUN_MODULES.mag[gun.mag].mag,reload:GUN_MODULES.mag[gun.mag].reload}
 }
 export function sanitizePlan(raw){
   const source=raw&&typeof raw==='object'?raw:{};
