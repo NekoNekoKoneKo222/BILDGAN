@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <meta name="theme-color" content="#080e18"/>
 <title>BILDGAN | Build Your Battle</title>
 <meta name="description" content="BILDGAN: 5分で決着する、自由に武器と装置を作る3D物理FPS。ソロ・PvP・協力ボス戦。" />
@@ -16,6 +16,8 @@
       <div class="timer" id="timer">05:00</div>
     </header>
     <div id="statusline"></div>
+    <button id="diagnoseButton" type="button" aria-label="3D描画の診断情報を表示">3D診断</button>
+    <div id="diagPanel" hidden role="status" aria-live="polite"></div>
     <label id="quickBrightness" class="quickBrightness">☀ 明るさ <input id="brightnessQuick" type="range" min="80" max="200" step="5" value="135" aria-label="試合中の画面の明るさ"/><span id="brightnessQuickValue">135%</span></label>
     <div id="scoreboard"></div>
     <div id="crosshair"><span></span><span></span><span></span><span></span></div>

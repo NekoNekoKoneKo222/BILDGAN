@@ -16,6 +16,22 @@ let currentHp=100,currentAmmo=stats.mag,currentEnergy=150,isReloading=false,grab
 let playing=false,fireHeld=false,grabHeld=false,locked=false,respawning=false,lastMove=0,lastLook=0,lastFire=0,lastClock=0,menuTab='play';
 let toastTimer=0;
 const key={},stick={x:0,y:0},touchEnabled=matchMedia('(pointer:coarse)').matches;
+// iPad Safari gesture suppression. Menus remain scrollable, inputs remain editable.
+const editableTarget=target=>target?.closest?.('input, textarea, [contenteditable="true"]');
+document.addEventListener('selectstart',e=>{if(!editableTarget(e.target))e.preventDefault();});
+document.addEventListener('contextmenu',e=>{if(!editableTarget(e.target))e.preventDefault();});
+document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
+document.addEventListener('gesturestart',e=>e.preventDefault(),{passive:false});
+document.addEventListener('gesturechange',e=>e.preventDefault(),{passive:false});
+document.addEventListener('gestureend',e=>e.preventDefault(),{passive:false});
+document.addEventListener('touchmove',e=>{if(e.touches.length>=2)e.preventDefault();},{passive:false});
+let touchTapLast=0;
+document.addEventListener('touchend',e=>{
+ if(editableTarget(e.target))return;
+ const now=performance.now();
+ if(now-touchTapLast<320)e.preventDefault();
+ touchTapLast=now;
+},{passive:false});
 const renderer=new THREE.WebGLRenderer({antialias:!touchEnabled,powerPreference:'high-performance'});
 renderer.setPixelRatio(Math.min(devicePixelRatio,touchEnabled?1:1.5));
 renderer.setSize(innerWidth,innerHeight);
@@ -150,7 +166,7 @@ function orientTowardArena(){
  pitch=-.105;
  rotateCamera();
 }
-function rotateCamera(){camera.rotation.set(pitch,yaw,0);}
+function rotateCamera(){camera.rotation.set(pitch,yaw,0);camera.updateMatrixWorld(true);}
 function forward(){const out=new THREE.Vector3();camera.getWorldDirection(out);return out;}
 function net(v){return {x:v.x,y:v.y,z:v.z};}
 function readJson(key,fallback){try{return JSON.parse(localStorage.getItem(STORAGE+key)||'null')??structuredClone(fallback)}catch{return structuredClone(fallback)}}
@@ -671,8 +687,60 @@ function collide(x,z){
  return false;
 }
 let lastFrame=performance.now();
+let renderError='',renderStats='',diagVisible=false,lastDiagnostic=0,blankChecks=0;
+const diagPanel=$('diagPanel');
+const diagButton=$('diagnoseButton');
+diagButton.onclick=()=>{
+ diagVisible=!diagVisible;
+ diagPanel.hidden=!diagVisible;
+ if(diagVisible)diagPanel.textContent='診断情報を取得しています…';
+};
+function reportRuntimeError(err){
+ renderError=String(err?.message||err||'Unknown error').slice(0,160);
+ diagPanel.hidden=false;diagVisible=true;diagButton.textContent='描画エラー';
+ diagPanel.textContent='3D描画エラー: '+renderError;
+ console.error('[BILDGAN] render failure:',err);
+}
+window.addEventListener('error',e=>{if(playing)reportRuntimeError(e.error||e.message);});
+window.addEventListener('unhandledrejection',e=>{if(playing)reportRuntimeError(e.reason);});
+renderer.domElement.addEventListener('webglcontextlost',e=>{
+ e.preventDefault();reportRuntimeError('WebGL context lost. Browser/device GPU context unavailable.');
+});
+renderer.domElement.addEventListener('webglcontextrestored',()=>{renderError='';diagButton.textContent='3D診断';});
+function diagnosticSample(now){
+ if(!playing||now-lastDiagnostic<3500)return;
+ lastDiagnostic=now;
+ const info=renderer.info.render;
+ const dir=forward(),pos=camera.position;
+ const point=new THREE.Vector3(0,1,0).project(camera);
+ const inside=point.z>-1&&point.z<1&&Math.abs(point.x)<1&&Math.abs(point.y)<1;
+ const stats='Draw calls: '+info.calls+' · Triangles: '+info.triangles+
+  '\\nCamera: '+pos.x.toFixed(1)+', '+pos.y.toFixed(1)+', '+pos.z.toFixed(1)+
+  '\\nLook: '+dir.x.toFixed(2)+', '+dir.y.toFixed(2)+', '+dir.z.toFixed(2)+
+  '\\nArena center in view: '+(inside?'YES':'NO')+
+  '\\nWebGL: '+renderer.capabilities.isWebGL2+' · Canvas: '+renderer.domElement.width+'x'+renderer.domElement.height;
+ let uniform='unknown';
+ try{
+  const gl=renderer.getContext(),pixels=[];
+  for(const [fx,fy] of [[.12,.17],[.5,.17],[.83,.17],[.25,.35],[.75,.35],[.5,.65]]){
+   const v=new Uint8Array(4);
+   gl.readPixels(Math.floor(renderer.domElement.width*fx),Math.floor(renderer.domElement.height*fy),1,1,gl.RGBA,gl.UNSIGNED_BYTE,v);
+   pixels.push([v[0],v[1],v[2]]);
+  }
+  const variation=Math.max(...[0,1,2].map(ch=>Math.max(...pixels.map(p=>p[ch]))-Math.min(...pixels.map(p=>p[ch]))));
+  uniform=variation<8?'YES (nearly solid color)':'NO';
+ }catch(err){uniform='unavailable';}
+ renderStats=stats+'\\nBlank-looking canvas: '+uniform+(renderError?'\\nERROR: '+renderError:'');
+ if(diagVisible)diagPanel.textContent=renderStats;
+ if(info.calls===0||info.triangles===0){
+  blankChecks++;
+  if(blankChecks>=2){diagVisible=true;diagPanel.hidden=false;diagPanel.textContent='3Dモデルが描画されていません。\\n'+renderStats;}
+ }else blankChecks=0;
+ // Non-sensitive drawing stats are logged server-side to make a reproducible bug report possible.
+ if(connected&&blankChecks>=2)send({t:'clientdiag',drawCalls:info.calls,triangles:info.triangles,centerInside:inside,uniform});
+}
 function loop(now){
- requestAnimationFrame(loop);const dt=clamp((now-lastFrame)/1000,.001,.05);lastFrame=now;
+ requestAnimationFrame(loop);try{const dt=clamp((now-lastFrame)/1000,.001,.05);lastFrame=now;
  const menuOpen=!$('menu').hidden;
  if(playing&&$('waiting').hidden&&$('matchEnd').hidden){
   const ahead=Number(key.KeyW||key.ArrowUp)-Number(key.KeyS||key.ArrowDown)-stick.y;
@@ -725,7 +793,14 @@ function loop(now){
   camera.position.set(Math.sin(now*.00011)*27,8,32+Math.cos(now*.0001)*3);
   camera.lookAt(0,2,0);yaw=0;pitch=0;
  }
- renderer.render(scene,camera);
+ }catch(err){reportRuntimeError(err);}finally{
+  try{
+   // Rendering must continue even if a physics, UI or animation update fails.
+   camera.updateMatrixWorld(true);
+   renderer.render(scene,camera);
+   diagnosticSample(now);
+  }catch(err){reportRuntimeError(err);}
+ }
 }
 changeKind('steel');
 requestAnimationFrame(loop);

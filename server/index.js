@@ -420,6 +420,13 @@ wss.on('connection',(ws,req)=>{
   if(!player||!room)return;
   if(m.t==='start'&&room.state==='lobby'&&room.host===player.id){begin(room,true);return;}
   if(room.state!=='running')return;
+  if(m.t==='clientdiag'){
+   const calls=Number(m.drawCalls),tris=Number(m.triangles);
+   if(Number.isFinite(calls)&&Number.isFinite(tris)&&room.tick%8===0){
+    console.info('[BILDGAN/CLIENT3D]',JSON.stringify({calls:Math.trunc(calls),triangles:Math.trunc(tris),centerInside:!!m.centerInside,uniform:String(m.uniform||'').slice(0,64)}));
+   }
+   return;
+  }
   if(m.t==='move'&&player.alive&&validPosition(m.pos)){
    const now=Date.now(),delta=clamp((now-player.movedAt)/1000,.03,.3);
    player.movedAt=now;
