@@ -42,10 +42,71 @@ const accent=new THREE.PointLight(0x37ffc8,2.1,55);accent.position.set(0,14,0);s
 // Metals without an environment map render nearly black. Use semi-matte materials for this arena.
 const mat=(color,metalness=.22,roughness=.76)=>new THREE.MeshStandardMaterial({color,metalness,roughness});
 const metal=mat(0x829cad,.26,.66),dark=mat(0x466578,.14,.78),bright=mat(0x35d2bc,.18,.58),floorMaterial=mat(palette.floor,.05,.92);
-const ground=new THREE.Mesh(new THREE.PlaneGeometry(124,124),floorMaterial);ground.rotation.x=-Math.PI/2;ground.userData.ground=true;scene.add(ground);
+// Unlit arena floor stays clearly visible even if the device's lighting path is faulty.
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(124,124),new THREE.MeshBasicMaterial({color:0x91b3a5,side:THREE.DoubleSide}));
+ground.rotation.x=-Math.PI/2;ground.userData.ground=true;scene.add(ground);
 const grid=new THREE.GridHelper(122,61,0xb2e7d7,0x92b8b2);grid.position.y=.013;scene.add(grid);
 const trim=new THREE.Group();scene.add(trim);
 const box=(parent,w,h,d,x,y,z,m)=>{const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y,z);parent.add(o);return o};
+// High-contrast ground lanes, geometry and goal silhouettes: visible from EVERY spawn.
+// Basic materials intentionally remain legible independent of the 3D lighting setup.
+const laneA=new THREE.MeshBasicMaterial({color:0x325f69,side:THREE.DoubleSide});
+const laneB=new THREE.MeshBasicMaterial({color:0xc2d8c4,side:THREE.DoubleSide});
+const laneEdge=new THREE.MeshBasicMaterial({color:0x67f0d1,side:THREE.DoubleSide});
+const gateMat=new THREE.MeshBasicMaterial({color:0x365367});
+const gateTrim=new THREE.MeshBasicMaterial({color:0xffcb66});
+function groundStripe(x,z,w,d,m,y=.035){box(trim,w,.025,d,x,y,z,m);}
+for(const x of [-24,0,24]){
+ groundStripe(x,0,11,104,laneA);
+ groundStripe(x-6,0,.23,105,laneEdge,.055);
+ groundStripe(x+6,0,.23,105,laneEdge,.055);
+ for(let z=-44;z<=44;z+=10)groundStripe(x,z,3,.34,laneB,.06);
+}
+for(const z of [-34,34]){
+ groundStripe(0,z,106,7,laneA);
+ groundStripe(0,z-4,106,.2,laneEdge,.06);
+ groundStripe(0,z+4,106,.2,laneEdge,.06);
+}
+// Bright outer-wall gates establish distance and silhouette; players stay inside them.
+for(const x of [-51,51])for(const z of [-38,-15,15,38]){
+ box(trim,3.8,10,3.8,x,5,z,gateMat);
+ box(trim,4.2,.42,4.2,x,10.3,z,gateTrim);
+ box(trim,.8,4,.24,x,5,z+(x<0?2.04:-2.04),laneEdge);
+}
+for(const z of [-51,51])for(const x of [-35,-12,12,35]){
+ box(trim,3.8,9,3.8,x,4.5,z,gateMat);
+ box(trim,4.4,.45,4.4,x,9.35,z,gateTrim);
+}
+const helipad=new THREE.Mesh(new THREE.RingGeometry(9.2,10.2,64),new THREE.MeshBasicMaterial({color:0xffd578,side:THREE.DoubleSide}));
+helipad.rotation.x=-Math.PI/2;helipad.position.y=.115;trim.add(helipad);
+function makeBeaconLabel(text,color){
+ const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;
+ const ctx=canvas.getContext('2d');ctx.clearRect(0,0,512,128);
+ ctx.fillStyle='rgba(8,35,48,0.86)';ctx.fillRect(5,5,502,118);
+ ctx.strokeStyle=color;ctx.lineWidth=8;ctx.strokeRect(5,5,502,118);
+ ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='900 61px system-ui,sans-serif';ctx.fillStyle='white';ctx.fillText(text,256,65,490);
+ const tex=new THREE.CanvasTexture(canvas);tex.colorSpace=THREE.SRGBColorSpace;
+ const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,depthTest:false,transparent:true}));
+ sprite.scale.set(8.5,2.1,1);return sprite;
+}
+for(const [label,x] of [['A',-24],['B',0],['C',24]]){
+ const marker=new THREE.Group();marker.position.set(x,0,0);
+ const tower=new THREE.Mesh(new THREE.CylinderGeometry(.9,1.45,7.5,10),new THREE.MeshBasicMaterial({color:0x255667}));tower.position.y=3.75;marker.add(tower);
+ const light=new THREE.Mesh(new THREE.SphereGeometry(.72,12,8),new THREE.MeshBasicMaterial({color:0xffe28d}));light.position.y=8;marker.add(light);
+ const labelSprite=makeBeaconLabel('RELAY '+label,'#6cf9d1');labelSprite.position.y=11;marker.add(labelSprite);
+ // A broad glowing target triangle for a distant landmark.
+ const tip=new THREE.Mesh(new THREE.ConeGeometry(2,2.8,4),new THREE.MeshBasicMaterial({color:0x3ceccc}));
+ tip.position.y=8.1;tip.rotation.y=Math.PI/4;marker.add(tip);
+ trim.add(marker);
+}
+// Distant skyline breaks up the horizon while staying outside the combat floor.
+for(let i=0;i<20;i++){
+ const angle=i*Math.PI*2/20;
+ const x=Math.sin(angle)*67,z=Math.cos(angle)*67;
+ const h=12+(i%4)*4;
+ box(trim,7,h,7,x,h/2,z,i%3===0?gateMat:metal);
+ box(trim,7.6,.5,7.6,x,h+.25,z,i%2?gateTrim:laneEdge);
+}
 for(let i=-3;i<=3;i++)for(const side of [-1,1]){
  const a=i*16;
  box(trim,2.5,9,3,a,4.5,side*59,metal);
@@ -83,6 +144,12 @@ box(arm,.3,.08,.14,0,.18,-.2,bright);
 const muzzle=new THREE.Mesh(new THREE.CylinderGeometry(.055,.072,.4,9),mat(0x06121d,.9));muzzle.rotation.x=Math.PI/2;muzzle.position.z=-.85;arm.add(muzzle);
 const muzzleFlash=new THREE.PointLight(0xffd4a7,0,8);muzzleFlash.position.set(0,.02,-1);viewWeapon.add(muzzleFlash);
 let yaw=0,pitch=0,vy=0,onGround=true,shotKick=0,stepPhase=0;
+// Spawn and respawn always face the center of the fighting area.
+function orientTowardArena(){
+ yaw=Math.atan2(camera.position.x,camera.position.z);
+ pitch=-.105;
+ rotateCamera();
+}
 function rotateCamera(){camera.rotation.set(pitch,yaw,0);}
 function forward(){const out=new THREE.Vector3();camera.getWorldDirection(out);return out;}
 function net(v){return {x:v.x,y:v.y,z:v.z};}
@@ -327,7 +394,7 @@ function connect(mode,invite=''){
 function onPacket(m){
  if(m.t==='error'){toast(m.message||'接続エラー');returnToMenu();return;}
  if(m.t==='welcome'){
-  me=m.playerId;roomId=m.id;connected=true;gameMode=m.mode;camera.position.set(m.pos.x,m.pos.y,m.pos.z);yaw=0;pitch=0;rotateCamera();
+  me=m.playerId;roomId=m.id;connected=true;gameMode=m.mode;camera.position.set(m.pos.x,m.pos.y,m.pos.z);orientTowardArena();
   currentAmmo=m.ammo;stats=m.gun;stock=sanitizePlan(m.inv);currentEnergy=150;renderAmmo();setPhase(gameMode.toUpperCase());$('statusline').textContent='ROOM '+roomId;
   return;
  }
@@ -345,7 +412,7 @@ function onPacket(m){
   $('statusline').textContent='ルーム '+roomId+' · '+(gameMode==='boss'?'弱点を狙え':'リレー A / B / C を確保');
   $('buildReadout').hidden=true;$('matchEnd').hidden=true;$('bossHud').hidden=gameMode!=='boss';$('inviteTop').hidden=gameMode==='solo';
   $('objectiveHud').style.display=gameMode==='boss'?'none':'flex';relayGroup.visible=gameMode!=='boss';
-  if(!touchEnabled)toast('画面をクリックして視点固定 · Bで建築');
+  if(!touchEnabled)toast('アリーナ中心を向いて開始！ 白いRELAY標識を目指そう · クリックで視点固定');
   else toast('右側をドラッグして視点移動');
   playTone(700,.25);
   return;
@@ -376,7 +443,7 @@ function onPacket(m){
  }
  if(m.t==='impact'){shockRing(m.pos,m.radius,0xff6357,300);return;}
  if(m.t==='respawn'){
-  camera.position.set(m.pos.x,m.pos.y,m.pos.z);currentHp=100;vy=0;respawning=false;
+  camera.position.set(m.pos.x,m.pos.y,m.pos.z);orientTowardArena();currentHp=100;vy=0;respawning=false;
   $('damageOverlay').style.opacity='0';toast('復帰！ 1.8秒の無敵時間');return;
  }
  if(m.t==='ended'){showResult(m);return;}

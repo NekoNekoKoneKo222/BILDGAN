@@ -26,7 +26,9 @@ const N=p=>{const m=Math.hypot(p.x,p.y,p.z)||1;return V(p.x/m,p.y/m,p.z/m)};
 const rnd=(min,max)=>min+Math.random()*(max-min);
 const send=(ws,obj)=>{if(ws?.readyState===WebSocket.OPEN){try{ws.send(JSON.stringify(obj))}catch{}}};
 const cast=(room,obj)=>{for(const p of room.players.values())send(p.ws,obj)};
-const spawn=n=>[V(-38,1.65,-37),V(38,1.65,37),V(-38,1.65,37),V(38,1.65,-37)][n%4];
+// Place combatants near the objective lanes instead of pointing out into an empty corner.
+const SPAWNS=[V(-27,1.65,-24),V(27,1.65,24),V(-27,1.65,24),V(27,1.65,-24)];
+const spawn=n=>({...SPAWNS[n%SPAWNS.length]});
 const roomCode=()=>crypto.randomBytes(3).toString('hex').toUpperCase();
 const ROOM_MAX=80, PLAYER_MAX=4;
 function makeRoom(mode){
@@ -47,7 +49,7 @@ function newPlayer(room,ws,name,gun,plan){
  return p;
 }
 function makeBot(){
- return {id:'BOT',name:'SCRAP BOT',pos:V(31,1.65,31),hp:100,alive:true,kills:0,deaths:0,score:0,energy:0,shotAt:0,respawnAt:0,shield:Date.now()+1500,dir:1,side:1};
+ return {id:'BOT',name:'SCRAP BOT',pos:V(22,1.65,20),hp:100,alive:true,kills:0,deaths:0,score:0,energy:0,shotAt:0,respawnAt:0,shield:Date.now()+1500,dir:1,side:1};
 }
 function lobbyState(room){
  cast(room,{t:'lobby',id:room.id,host:room.host,players:[...room.players.values()].map(p=>({id:p.id,name:p.name})),maxPlayers:PLAYER_MAX});
@@ -223,7 +225,7 @@ function interactPhysics(room,p,m){
 }
 function updateBot(room,dt,now){
  const bot=room.bot;if(!bot)return;
- if(!bot.alive){if(now>=bot.respawnAt){bot.alive=true;bot.hp=100;bot.pos=V(31,1.65,31);bot.shield=now+1400;cast(room,{t:'event',message:'SCRAP BOT 復帰'});}return;}
+ if(!bot.alive){if(now>=bot.respawnAt){bot.alive=true;bot.hp=100;bot.pos=V(22,1.65,20);bot.shield=now+1400;cast(room,{t:'event',message:'SCRAP BOT 復帰'});}return;}
  const player=[...room.players.values()].filter(x=>x.alive).sort((a,b)=>D(a.pos,bot.pos)-D(b.pos,bot.pos))[0];
  const targetRelay=room.relays.filter(r=>r.owner!=='BOT').sort((a,b)=>D(bot.pos,V(a.pos.x,1.65,a.pos.z))-D(bot.pos,V(b.pos.x,1.65,b.pos.z)))[0];
  const go=player&&D(player.pos,bot.pos)<24?player.pos:(targetRelay?V(targetRelay.pos.x,1.65,targetRelay.pos.z):V(0,1.65,0));
