@@ -60,7 +60,7 @@ test('end-to-end: PvP lobby, start, building, reloading, solo, boss', {timeout:2
   assert.equal(begin1.mode,'pvp');console.log('STAGE pvp begun');
   assert.ok(begin1.duration<300000);
   await p2.wait(m=>m.t==='begin');
-  p1.send({t:'place',kind:'steel',pos:{x:-35,y:1,z:-35},rot:0});
+  p1.send({t:'place',kind:'steel',pos:{x:welcome1.pos.x+5,y:1,z:welcome1.pos.z},rot:0});
   const stock=await p1.wait(m=>m.t==='inventory');
   assert.equal(stock.inv.steel,2);console.log('STAGE building');
   p1.send({t:'shoot',dir:{x:0,y:0,z:1}});
