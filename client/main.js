@@ -690,10 +690,14 @@ let lastFrame=performance.now();
 let renderError='',renderStats='',diagVisible=false,lastDiagnostic=0,blankChecks=0;
 const diagPanel=$('diagPanel');
 const diagButton=$('diagnoseButton');
+// A bright camera-attached cube verifies whether Three.js is drawing any geometry at all.
+const calibrationCube=new THREE.Mesh(new THREE.BoxGeometry(.38,.38,.38),
+  new THREE.MeshBasicMaterial({color:0x18ff24,depthTest:false,depthWrite:false}));
+camera.add(calibrationCube);calibrationCube.position.set(1.05,.3,-2.2);calibrationCube.visible=false;
 diagButton.onclick=()=>{
  diagVisible=!diagVisible;
- diagPanel.hidden=!diagVisible;
- if(diagVisible)diagPanel.textContent='診断情報を取得しています…';
+ diagPanel.hidden=!diagVisible;calibrationCube.visible=diagVisible;
+ if(diagVisible)diagPanel.textContent='診断情報を取得しています…\n緑色の3D立方体が画面右に見えるか確認してください。';
 };
 function reportRuntimeError(err){
  renderError=String(err?.message||err||'Unknown error').slice(0,160);
@@ -732,9 +736,9 @@ function diagnosticSample(now){
  }catch(err){uniform='unavailable';}
  renderStats=stats+'\\nBlank-looking canvas: '+uniform+(renderError?'\\nERROR: '+renderError:'');
  if(diagVisible)diagPanel.textContent=renderStats;
- if(info.calls===0||info.triangles===0){
+ if(info.calls===0||info.triangles===0||uniform.startsWith('YES')){
   blankChecks++;
-  if(blankChecks>=2){diagVisible=true;diagPanel.hidden=false;diagPanel.textContent='3Dモデルが描画されていません。\\n'+renderStats;}
+  if(blankChecks>=2){diagVisible=true;diagPanel.hidden=false;calibrationCube.visible=true;diagPanel.textContent='3Dシーンの描画に異常を検出しました。緑の四角が見えるか確認してください。\\n'+renderStats;}
  }else blankChecks=0;
  // Non-sensitive drawing stats are logged server-side to make a reproducible bug report possible.
  if(connected&&blankChecks>=2)send({t:'clientdiag',drawCalls:info.calls,triangles:info.triangles,centerInside:inside,uniform});
