@@ -475,15 +475,15 @@ function canPlace(){
  const snap=v=>Math.round(v/2)*2;
  point.set(snap(point.x),Math.max(.95,Math.round((point.y-.95)/2)*2+.95),snap(point.z));
  if(point.distanceTo(camera.position)>10.5||Math.abs(point.x)>54||Math.abs(point.z)>54||point.y>12)return null;
- if(matchPhase==='prep'&&myHome&&Math.hypot(point.x-myHome.x,point.z-myHome.z)>16)return null;
+ if(matchPhase==='prep'&&myHome&&Math.hypot(point.x-myHome.x,point.z-myHome.z)>9.5)return null;
  if(ARENA_SOLIDS.some(s=>Math.abs(point.x-s.pos.x)<s.half.x+1&&Math.abs(point.z-s.pos.z)<s.half.z+1&&Math.abs(point.y-s.pos.y)<s.half.y+1))return null;
  if(gameRule==='fortress'&&Object.values(CORE_LOCATIONS).some(core=>Math.hypot(point.x-core.x,point.z-core.z)<3.3))return null;
  return point;
 }
 function makePlacement(){
  const p=canPlace();if(!p){toast('設置できる場所に近づいてください');return;}
+ if((stock[chosenKind]||0)<=0){toast('このパーツは在庫切れです');return;}
  send({t:'place',kind:chosenKind,rot:rotation,pos:net(p)});
- playTone(355,.09,'square',.02);
 }
 function send(obj){if(ws?.readyState===WebSocket.OPEN){try{ws.send(JSON.stringify(obj))}catch{}}}
 function connect(mode,invite=''){
@@ -528,7 +528,7 @@ function onPacket(m){
   return;
  }
  if(m.t==='phase'){
-  matchPhase=m.phase;updateMatchPhase();
+  matchPhase=m.phase;if(matchPhase==='battle')buildMode=false;updateMatchPhase();
   if(matchPhase==='battle'){toast('建築完了！ 戦闘開始');playTone(730,.18);}
   return;
  }
@@ -548,10 +548,19 @@ function onPacket(m){
  if(m.t==='inventory'){stock=sanitizePlan(m.inv);refreshHotbar();return;}
  if(m.t==='grabbing'){grabId=m.id;toast(grabId?'物体を保持中 · 離すと投げます':'物体を投げました');return;}
  if(m.t==='shot'){
-  flashLine(m.from,m.to,m.by===me?(coreColors[m.core]||palette.cyan):palette.orange);if(m.by===me)muzzleFlash.intensity=5;return;
+  flashLine(m.from,m.to,m.by===me?(coreColors[m.core]||palette.cyan):palette.orange);
+  if(m.hitType&&m.hitType!=='none')impactEffect(m.to,m.hitType);
+  if(m.by===me)muzzleFlash.intensity=5;
+  return;
  }
- if(m.t==='break'){burst(m.pos,palette.orange);playTone(190,.15,'sawtooth',.02);return;}
- if(m.t==='explosion'){shockRing(m.pos,m.radius,palette.orange,350);burst(m.pos,0xffaf7e);playTone(130,.24,'sawtooth',.07);return;}
+ if(m.t==='placed'){buildPulse(m.pos);if(m.by===me)playTone(470,.08,'triangle',.04);return;}
+ if(m.t==='physicsImpact'){impactFlare(m.pos,0xffffff,.7);burst(m.pos,0xffc886);playTone(180,.14,'sawtooth',.035);return;}
+ if(m.t==='correction'){
+  if(m.pos&&[m.pos.x,m.pos.y,m.pos.z].every(Number.isFinite)){camera.position.set(m.pos.x,m.pos.y,m.pos.z);vy=0;}
+  return;
+ }
+ if(m.t==='break'){burst(m.pos,palette.orange);impactFlare(m.pos,0xffad69,.8);shockRing(m.pos,1.2,0xffa46c,380);playTone(190,.15,'sawtooth',.02);return;}
+ if(m.t==='explosion'){shockRing(m.pos,m.radius,palette.orange,m.minor?250:480);impactFlare(m.pos,m.minor?0xbd86fa:0xffbd75,m.minor?.7:1.7);burst(m.pos,0xffaf7e);playTone(m.minor?260:130,m.minor?.1:.24,'sawtooth',m.minor?.025:.055);return;}
  if(m.t==='telegraph'){
   const tint=m.kind==='wave'?0xfbbd60:0xff6c6c;
   shockRing(m.pos,m.radius,tint,1200);feed('⚠ '+(m.kind==='wave'?'衝撃波をジャンプで避けろ！':'赤い範囲から離れろ！'));playTone(275,.2,'sawtooth',.035);return;
@@ -614,7 +623,7 @@ function applyState(s){
   seen.add(part.id);
   let view=partViews.get(part.id);
   if(!view){const root=buildPart(part.kind);root.userData.partId=part.id;partGroup.add(root);view={root,target:new THREE.Vector3(),rot:part.rot,kind:part.kind};partViews.set(part.id,view);}
-  view.target.set(part.pos.x,part.pos.y,part.pos.z);view.root.rotation.y=part.angle===null?(part.rot||0)*Math.PI/2:part.angle;
+  view.target.set(part.pos.x,part.pos.y,part.pos.z);view.root.rotation.y=part.angle===null?(part.rot||0)*Math.PI/2:part.angle;view.root.scale.setScalar(part.disabled?.88:1);
  }
  for(const [id,view] of partViews)if(!seen.has(id)){partGroup.remove(view.root);partViews.delete(id);}
  if(s.boss){
@@ -675,7 +684,7 @@ function updateDebris(data){
 function showResult(m){
  playing=false;fireHeld=false;grabHeld=false;buildMode=false;document.exitPointerLock?.();
  $('waiting').hidden=true;$('matchEnd').hidden=false;setPhase('ROUND COMPLETE');
- const victory=m.winner==='TEAM'||m.winner===me;
+ const victory=m.winner==='TEAM'||m.winner===me||m.winnerTeam===myTeam;
  $('endTitle').textContent=gameMode==='boss'?(victory?'BOSS DESTROYED':'MISSION FAILED'):(victory?'VICTORY':'ROUND FINISHED');
  $('endDetail').textContent=m.message||'試合終了';
  const host=$('endStats');host.replaceChildren();
@@ -813,15 +822,10 @@ if(touchEnabled){
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 function collide(x,z){
  if(Math.abs(x)>54||Math.abs(z)>54)return true;
- if(blockedPlayerPosition({x,y:camera.position.y,z}))return true;
- if(gameRule==='fortress'&&gameMode!=='boss'&&Object.values(CORE_LOCATIONS).some(core=>Math.hypot(x-core.x,z-core.z)<2.45))return true;
- if(matchPhase==='prep'&&myHome&&Math.hypot(x-myHome.x,z-myHome.z)>16.5)return true;
- if(!gameState)return false;
- for(const p of gameState.parts){
-  if(Math.abs(camera.position.y-p.pos.y)>2.0)continue;
-  if(Math.abs(x-p.pos.x)<1.17&&Math.abs(z-p.pos.z)<1.17)return true;
- }
- return false;
+ if(matchPhase==='prep'&&myHome&&Math.hypot(x-myHome.x,z-myHome.z)>9.95)return true;
+ const from={x:camera.position.x,y:camera.position.y,z:camera.position.z};
+ const to={x,y:camera.position.y,z};
+ return blockedSweep(from,to,gameState?.parts||[],gameRule==='fortress'&&gameMode!=='boss');
 }
 let lastFrame=performance.now();
 let renderError='',renderStats='',diagVisible=false,lastDiagnostic=0,blankChecks=0;
@@ -931,10 +935,11 @@ function loop(now){
  for(let i=particles.length-1;i>=0;i--){
   const p=particles[i],t=(now-p.start)/p.duration;
   if(t>=1){
-   effectGroup.remove(p.mesh);p.mesh.geometry.dispose();p.mesh.material.dispose();particles.splice(i,1);
+   removeEffect(p);particles.splice(i,1);
   }else{
    p.mesh.material.opacity=clamp(1-t,0,1)*.82;
    if(p.expand)p.mesh.scale.setScalar(1+p.expand*t);
+   if(p.velocity){p.mesh.position.addScaledVector(p.velocity,dt);p.velocity.y-=dt*16;}
   }
  }
  if(menuOpen){
